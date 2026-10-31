@@ -11,7 +11,7 @@ LineageOS 更新时怎么重做、以及哪些东西必须在 rebase 之后重�
 | 分支 | `lineage-24.0` |
 | 提交 | `eff4b40407a1b6f1b1ab84554cbb540bcb495175`（`Merge branch 'lineage-20' of …/android_kernel_qcom_sm8450 into HEAD`） |
 | 版本 | `Makefile`: `VERSION=5 PATCHLEVEL=10 SUBLEVEL=269` → Linux **5.10.269** |
-| 规模 | 68,710 个文件；`.git` 打包后 ~450MB |
+| 规模 | 68,756 个被跟踪文件（+ 我们自己的 8 个）；`.git` 打包后 ~450MB |
 | 为什么是它 | 这就是 marble 的 LineageOS 24.0 ROM 出厂内核，ROM 里 `vendor_dlkm`/`vendor_boot` 的几百个 `.ko` 就是对着这棵树编的 → vermagic/KMI/CFI 天然对齐，不需要像 dash 那样补 vendor hook |
 
 导入方式（一次性，可复现）：
@@ -22,6 +22,38 @@ cd android_kernel_xiaomi_sm8450 && git fetch --depth=1 origin eff4b40407a1b6f1b1
 git checkout FETCH_HEAD
 rsync -a --exclude=.git ./ <本仓库>/ && cd <本仓库> && git add -A
 ```
+
+### ⚠️ import 之后必须核对文件集（2026-10-31 踩过）
+
+`git add -A` **会被内核树自己的 .gitignore 静默吃掉文件**——包括上游其实有跟踪的。
+第一次 import 就丢了 7 个，其中之一让 `make Image` 直接失败：
+
+```
+techpack/stub/{Makefile,stub.c,include/uapi/stub/Kbuild}   # techpack/.gitignore 有 "*/" 规则
+arch/arm/boot/dts/vendor, arch/arm64/boot/dts/vendor       # 上游跟踪的符号链接
+tools/testing/selftests/bpf/test_progs.c
+tools/testing/selftests/tc-testing/plugins/__init__.py
+```
+
+症状：本地（工作树里有 tarball 带进来的那份）编得过，CI（只有 tracked 文件）报
+`scripts/Makefile.build:45: .../techpack/stub/Makefile: No such file or directory`。
+所以 import/换基底之后**必跑**这两条：
+
+```bash
+# 1) 文件集：上游跟踪的有没有丢
+git -C <上游 clone> ls-files | sort > /tmp/up.txt
+git ls-files | sort > /tmp/ours.txt
+comm -23 /tmp/up.txt /tmp/ours.txt          # 输出必须为空（该补的用 git add -f）
+
+# 2) 内容：逐字节比对（-c 校验和、-l 保留符号链接、-n 只报告）
+rsync -rcnl --exclude=.git --exclude=.github --exclude=docs \
+      --exclude=README.md --exclude=marble_gki.fragment --exclude=.scmversion \
+      <上游 clone>/ ./
+# 输出必须为空
+```
+
+补回来的文件要写进提交信息（说明为什么被 ignore、为什么仍然要跟踪），别只 `add -f`
+了事——下次换基底时同样的坑还会在。
 
 ## 2. 为什么只 import 成一个提交（不是 dash 那种真实历史）
 

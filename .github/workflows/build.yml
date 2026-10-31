@@ -12,9 +12,12 @@ on:
   push:
     branches: [main]
     paths:
-      - '.github/workflows/build.yml'
-      - '.github/scripts/**'
+      # 树里绝大多数文件是上游的，改它们不该触发一次 25 分钟的构建；
+      # 会真正影响产物的只有下面这些（其余用手动 Run workflow）。
+      - '.github/**'
       - 'arch/arm64/configs/marble_gki.fragment'
+      - 'include/linux/sched.h'
+      - 'include/linux/sched/user.h'
       - 'README.md'
 
 env:

@@ -18,6 +18,7 @@ ROM 出厂用的那棵树，KMI 天然对齐。
 | `include/linux/sched.h`、`sched/user.h` | DroidSpaces kABI padding（`sysv_sem`/`sysv_shm`/`mq_bytes` 挪进 Android ABI 预留位） |
 | `.github/scripts/gen-config.sh` | 配置唯一入口：LineageOS vendor 链 + 我们的 fragment（本地与 CI 同一份） |
 | `.github/scripts/verify-tree.sh` | 源码级门禁：树的身份 / kABI padding / gki_defconfig 是否被动过 |
+| `.github/scripts/kabi-layout-diff.py` | 离线证明 kABI 没破：两份 vmlinux 的同名类型尺寸比对（见 docs/version-pins.md §7） |
 | `docs/` | 基底来历、版本冻结、上游 README 原文 |
 
 > 根 `README.md` 是本仓库说明，覆盖了上游 kernel 的那份；上游原文留在
@@ -52,6 +53,16 @@ make O=out ARCH=arm64 TARGET_PRODUCT=marble LLVM=1 LLVM_IAS=1 -j$(nproc) Image
 
 `TARGET_PRODUCT=marble` 不是装饰：`drivers/input/Makefile` 按它加
 `-DCONFIG_TARGET_PRODUCT_MARBLE`。
+
+### 已验证到什么程度（2026-10-31）
+
+- 本地 `-j20` 全量构建 **5m11s** 出 `Image`（37MB），版本串
+  `5.10.269-gki-droidspaces-lakitu`，ikconfig 里 `LTO_CLANG_THIN`/`CFI_CLANG`/DroidSpaces 全套都在；
+- **干净克隆**（只有 git 跟踪的文件，= CI 的文件集）从零构建通过，ikconfig 与工作树构建逐行相同；
+- **kABI 布局实测**：我们的配置 vs stock 配置，9908 个同名类型 **0 个尺寸变化**，
+  `sysv_sem`/`sysv_shm`/`mq_bytes` 正好落在 `android_kabi_reserved6..8` / `reserved1` 上
+  → ROM 里预编译的 vendor_dlkm 模块按原偏移访问是安全的。证据与复现命令见
+  [docs/version-pins.md §7](docs/version-pins.md)。
 
 ### 工具链铁律（实机踩过，2026-10-16）
 

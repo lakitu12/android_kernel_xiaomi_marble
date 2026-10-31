@@ -77,8 +77,49 @@ builtin + `gki-android12-5.10` 的 SUSFS，所以 5.10 上的组合是存在过�
 
 | 项 | 值 |
 |---|---|
-| 提交 | 补 |
-| CI run | 补 |
-| 本地构建 | 补 |
-| 离线门禁 | 补 |
-| 上机 | 补 |
+| 本地构建 | 2026-10-31 22:10，clang r596125 (22.0.2)，`make -j20` **5m11s**，`Image` 37MB / `vmlinux` 508MB（15GB 机器，LTO 链接阶段吃 swap） |
+| 版本串 | `Linux version 5.10.269-gki-droidspaces-lakitu (lakitu@localhost) (Android (15682573 … clang version 22.0.2 …) #1 SMP PREEMPT` |
+| ikconfig | `LTO_CLANG_THIN=y` + `# CONFIG_LTO_CLANG_FULL is not set` + `CFI_CLANG=y` + `SYSVIPC/POSIX_MQUEUE/IPC_NS/PID_NS/DEVTMPFS/USER_NS/KALLSYMS_ALL/KPROBES/MACVLAN/IP_SET=y` |
+| 干净克隆复现 | 从 `file://` 新 clone（只有 tracked 文件，= CI 看到的文件集）→ verify-tree 过 → 编过 → ikconfig 与工作树构建**逐行相同**（证明仓库自足，不依赖 tarball 里的残留文件） |
+| kABI 布局 | 见 §7：9908 个同名类型**一个都没变尺寸** |
+| CI | run `41209919015`（首次，红：`techpack/stub` 被 .gitignore 吃掉）→ 修复后 run 见 §8 |
+| 上机 | 待刷（设备未接） |
+
+§6 里那次本地构建的命令就是 README 里那四条，没有别的魔法。
+
+## 7. kABI 证据（pahole 实测，2026-10-31）
+
+开 `CONFIG_SYSVIPC`/`POSIX_MQUEUE` 会不会让 ROM 里预编译的 vendor_dlkm 模块错位？这是
+DroidSpaces 那对 kABI 补丁的**唯一**理由，所以不能只靠「打了补丁应该没事」，直接量。
+
+方法：同一棵树编两次，只差配置——
+
+```bash
+# A) 我们的配置（gen-config.sh 产出的 out/.config）
+# B) stock 配置：gki_defconfig + vendor/waipio_GKI → xiaomi_GKI → marble_GKI → debugfs
+#    唯一的改动是把 LTO 换成 THIN，否则 15GB 的机器在 FULL LTO 链接阶段被 OOM 杀掉
+#    （LTO 只影响代码生成，不影响结构体布局）
+pahole -s A/vmlinux > sizes-a.txt; pahole -s B/vmlinux > sizes-b.txt
+./.github/scripts/kabi-layout-diff.py A/vmlinux B/vmlinux
+```
+
+结果：
+
+| 检查 | 结果 |
+|---|---|
+| 同名类型 size 变化 | **0 / 9908** |
+| 只在我们的镜像里的类型 | 106 个，全是 SYSVIPC/POSIX_MQUEUE 带进来的（`compat_ipc_perm`、`mq_attr`、`semid64_ds` …） |
+| `task_struct` | `sysvsem @3592 (8B)`、`sysvshm @3600 (16B)`，正好盖住 stock 的 `android_kabi_reserved6/7/8`；其后的字段偏移逐个一致 |
+| `user_struct` | `mq_bytes @120 (8B)` 盖住 stock 的 `android_kabi_reserved1` |
+
+结论：不止 `task_struct`，**全内核同名类型的尺寸都没变**，所以 stock 编的模块按原偏移
+访问内核结构体是安全的。这个脚本留在 `.github/scripts/kabi-layout-diff.py`，换基底或
+加配置时重跑；它比「ABI 符号表看起来没报错」硬得多。
+
+## 8. CI 记录
+
+| run | 提交 | 结果 |
+|---|---|---|
+| `41209919015` | `a81d0e75` | ❌ 两变体都挂在 `verify-tree.sh`：`techpack/stub missing` —— 那是上游 `.gitignore`（`techpack/.gitignore` 的 `*/`）吃掉的 7 个 tracked 文件之一，见 [upstream-base.md](upstream-base.md) 的 import 自检 |
+| `41214550495` | `440e4a84` | ❌ 门禁修好了，但树里仍缺 `techpack/stub` → `make` 报 `scripts/Makefile.build:45: .../techpack/stub/Makefile: No such file` |
+| 待填 | `eb4d669` 之后 | ⏳ 补齐文件 + 干净克隆自建通过后再跑 |
