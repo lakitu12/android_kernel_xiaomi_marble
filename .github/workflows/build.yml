@@ -1,0 +1,276 @@
+name: Build marble LineageOS 24.0 (sm8450, 5.10.269) - DroidSpaces + SukiSU Ultra (KPM)
+
+# 内核源码整个在仓库里（tree 在仓库根目录，基底 = LineageOS android_kernel_xiaomi_sm8450
+# lineage-24.0 @ eff4b404 / Linux 5.10.269）。CI 不再 clone 任何内核树，只拉构建期外部
+# 组件（clang / SukiSU / AnyKernel3），所以「编出来的东西 == 仓库里 check in 的东西」。
+#
+# 我方的 delta（DroidSpaces kABI padding + arch/arm64/configs/marble_gki.fragment）已经
+# 是树里的提交，构建时零补丁；唯一剩下的构建期注入是 KSU/KPM（不入库，按 pin 钉死）。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build.yml'
+      - '.github/scripts/**'
+      - 'arch/arm64/configs/marble_gki.fragment'
+      - 'README.md'
+
+env:
+  # --- all build-time upstreams pinned (no floating refs) ---
+  # AOSP official clang prebuilt — MUST equal the toolchain that built the ROM's stock
+  # kernel (5.10.269-gki-geff4b40407a1 = clang 22.0.2 / r596125). CFI_CLANG/BTI codegen
+  # is only compatible within one clang release: an r547379(20.0.0)-built kernel panics
+  # in __cfi_check on the first call into a clang-22 vendor module — "Bad mode ...
+  # code 0x36000002 -- BTI" + "Kernel panic - not syncing: bad mode" (qcom_tsens, ~0.3s),
+  # captured in the device minidump partition 2026-10-16. Source: clang main-kernel branch.
+  CLANG_URL: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main-kernel/clang-r596125.tar.gz
+  # SukiSU Ultra stable v4.2.1-40994 (main line, pinned commit).
+  # NOTE: SUSFS is a `builtin`-branch-only feature and is intentionally not part of
+  # this build; the builtin branch could not be used at the time (its 2026-10-15 head
+  # half-merged #987 and fails to compile: ksu_manager_cmd / duplicate KSU_IOCTL_KPM /
+  # TRACK_THRONE - all fine on the main line). See docs/version-pins.md.
+  KSU_PIN: dfae923781350cb5113e0763a17e90cc4edd59b4
+  # Numbersf/AnyKernel3 template (SukiSU-app compatible, uppercase vars)
+  AK3_PIN: 0fc7569866bb5d5fe51752cc410dca3e92ab332f
+
+jobs:
+  build:
+    # KSU (root + KPM) and BYPASS (no-KSU) builds are independent:
+    # run them in parallel on separate runners (~18min total instead of ~35 serial)
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [ksu, bypass]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout (the kernel tree *is* this repo)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git make bc bison flex libssl-dev libelf-dev \
+            python3 python-is-python3 cpio pahole libncurses-dev rsync \
+            curl zip unzip tar xz-utils gcc g++ gawk openssl \
+            gcc-aarch64-linux-gnu device-tree-compiler
+
+      - name: Fetch clang prebuilt (AOSP r596125 = ROM stock kernel toolchain)
+        run: |
+          mkdir -p "$HOME/clang"
+          curl -fsSL --retry 3 -o /tmp/clang.tar.gz "$CLANG_URL"
+          tar -xzf /tmp/clang.tar.gz -C "$HOME/clang"
+          rm -f /tmp/clang.tar.gz
+          "$HOME/clang/bin/clang" --version | sed -n '1,2p'
+          "$HOME/clang/bin/clang" --version | grep -qF 'clang version 22.0.2' || { echo "::error::clang r596125 (22.0.2) expected"; exit 1; }
+
+      # 源码级门禁：树的身份（LineageOS 5.10.269）、DroidSpaces kABI padding、
+      # 配置只在 fragment 里、gki_defconfig 保持上游原样。任何一条丢了就立刻失败，
+      # 而不是 20 分钟后编出一个静默功能不全（或压根不是这个基底）的内核。
+      - name: Verify the in-tree marble delta
+        run: |
+          set -e
+          bash .github/scripts/verify-tree.sh .
+          echo "=== tree identity ==="
+          head -n 5 Makefile | tr '\n' ' '; echo
+          git log --oneline -n 6
+          echo "files: $(git ls-files | wc -l)"
+
+      # KSU/KPM 是唯一在构建期注入内核树的组件（不入库，按 pin 钉死）。必须在生成
+      # .config 之前跑，否则 CONFIG_KSU/CONFIG_KPM 这两个符号还不存在。
+      - name: Setup SukiSU Ultra (stable, pinned)
+        if: matrix.variant == 'ksu'
+        run: |
+          set -e
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/$KSU_PIN/kernel/setup.sh" | bash -s "$KSU_PIN"
+          test "$(git -C drivers/kernelsu rev-parse HEAD)" = "$KSU_PIN" || { echo "::error::KSU pin drift"; exit 1; }
+          git -C drivers/kernelsu log -1 --format='KSU @ %h %ad %s' --date=short
+          ls -l drivers/kernelsu
+
+      # LineageOS 的 vendor 配置链 + 我们的 fragment，本地和 CI 用的是同一个脚本
+      # （.github/scripts/gen-config.sh）。gki_defconfig 一个字节都不改。
+      - name: Generate kernel config (vendor chain + marble_gki.fragment)
+        run: |
+          set -e
+          export PATH="$HOME/clang/bin:$PATH"
+          export LD_LIBRARY_PATH="$HOME/clang/lib64:$LD_LIBRARY_PATH"
+          bash .github/scripts/gen-config.sh . out -droidspaces-lakitu
+          echo "=== gki_defconfig untouched? ==="
+          git diff --exit-code -- arch/arm64/configs/gki_defconfig && echo "pristine: yes"
+          echo "=== LTO / CFI in out/.config ==="
+          grep -E '^CONFIG_(LTO|CFI)' out/.config
+
+      - name: Enable KSU + KPM (ksu) / guard the bypass variant
+        run: |
+          set -e
+          export PATH="$HOME/clang/bin:$PATH"
+          MK="make O=out ARCH=arm64 TARGET_PRODUCT=marble LLVM=1 LLVM_IAS=1"
+          if [ "${{ matrix.variant }}" = "ksu" ]; then
+            for cfg in KSU KPM; do
+              sed -i "/^# CONFIG_${cfg} is not set/d; /^CONFIG_${cfg}=/d" out/.config
+              echo "CONFIG_${cfg}=y" >> out/.config
+            done
+            $MK olddefconfig >/dev/null
+            grep -q '^CONFIG_KSU=y$' out/.config || { echo "::error::CONFIG_KSU did not land (setup.sh not applied?)"; exit 1; }
+            grep -q '^CONFIG_KPM=y$' out/.config || { echo "::error::CONFIG_KPM did not land"; exit 1; }
+            echo "ksu variant: KSU + KPM enabled"
+          else
+            if grep -qE '^CONFIG_(KSU|KPM)=y$' out/.config; then
+              echo "::error::bypass config must not enable KSU/KPM (setup.sh ran?)"; exit 1
+            fi
+            echo "bypass variant: no KSU/KPM in config"
+          fi
+          # DroidSpaces 配置不能因为追加 KSU 而丢失
+          for cfg in SYSVIPC POSIX_MQUEUE IPC_NS PID_NS DEVTMPFS USER_NS; do
+            grep -q "^CONFIG_${cfg}=y$" out/.config || { echo "::error::$cfg lost after olddefconfig"; exit 1; }
+          done
+          grep -q '^CONFIG_LTO_CLANG_THIN=y$' out/.config || { echo "::error::LTO thin lost"; exit 1; }
+          grep -q '^CONFIG_CFI_CLANG=y$' out/.config || { echo "::error::CFI lost"; exit 1; }
+
+      - name: Build kernel Image
+        run: |
+          set -e
+          set -o pipefail
+          # swap headroom for the LTO link stage on the 7GB runner
+          sudo swapoff -a 2>/dev/null || true
+          sudo fallocate -l 8G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=8192
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+          export PATH="$HOME/clang/bin:$PATH"
+          export LD_LIBRARY_PATH="$HOME/clang/lib64:$LD_LIBRARY_PATH"
+          make O=out ARCH=arm64 TARGET_PRODUCT=marble \
+            LLVM=1 LLVM_IAS=1 -j2 Image 2>&1 | tee build.log
+          ls -lh out/arch/arm64/boot/Image
+
+      - name: Version gate + ikconfig assertions (${{ matrix.variant }})
+        run: |
+          set -e
+          IMG=out/arch/arm64/boot/Image
+          test -f "$IMG" || { echo "::error::Image not built"; exit 1; }
+          KVER=$(strings "$IMG" | grep -m1 "Linux version 5")
+          echo "kernel: $KVER"
+          echo "$KVER" | grep -q "5.10.269" || { echo "::error::version drifted: $KVER"; exit 1; }
+          echo "$KVER" | grep -q "droidspaces-lakitu" || { echo "::error::localversion suffix missing: $KVER"; exit 1; }
+          echo "SukiSU: $(grep -m1 'SukiSU-Ultra version:' build.log || echo '(version line not found)')"
+
+          CFG=$GITHUB_WORKSPACE/.github/scripts/extract-ikconfig
+          chmod +x "$CFG"
+          "$CFG" "$IMG" > /tmp/built-config
+          grep -E "CONFIG_LTO_CLANG_THIN=|CONFIG_CFI_CLANG=y|CONFIG_SYSVIPC=y|CONFIG_POSIX_MQUEUE=y" /tmp/built-config
+          if [ "${{ matrix.variant }}" = "ksu" ]; then
+            grep -q "^CONFIG_KSU=y$" /tmp/built-config || { echo "::error::KSU missing in ksu build"; exit 1; }
+            grep -q "^CONFIG_KPM=y$" /tmp/built-config || { echo "::error::KPM missing in ksu build"; exit 1; }
+          else
+            grep -Eq "^CONFIG_KSU=(y|m)$" /tmp/built-config && { echo "::error::KSU must be off in bypass build"; exit 1; }
+            grep -Eq "^CONFIG_KPM=(y|m)$" /tmp/built-config && { echo "::error::KPM must be off in bypass build"; exit 1; }
+            echo "bypass: KSU/KPM confirmed off"
+          fi
+          mkdir -p /tmp/ak3-images
+          if [ "${{ matrix.variant }}" = "ksu" ]; then
+            cp -v "$IMG" /tmp/ak3-images/Image-ksu
+          else
+            cp -v "$IMG" /tmp/ak3-images/Image-bypass
+          fi
+
+      - name: Prepare AnyKernel3 (${{ matrix.variant }})
+        run: |
+          set -e
+          mkdir -p /tmp/artifacts
+          # Base: Numbersf/AnyKernel3 (SukiSU-Ultra main maintainer) - uppercase var
+          # convention (BLOCK/IS_SLOT_DEVICE/NO_MAGISK_CHECK) that the SukiSU app
+          # flasher expects. Lowercase osm0sis style was silently ignored by the
+          # app flasher ("flash failed, no details"). Pinned + tool-size gated
+          # (drifted magiskboot once panicked).
+          git clone -q https://github.com/Numbersf/AnyKernel3 /tmp/AK3t
+          git -C /tmp/AK3t checkout -q "$AK3_PIN"
+          git -C /tmp/AK3t log -1 --format='AK3 @ %h %ad %s' --date=short
+          test "$(stat -c %s /tmp/AK3t/tools/magiskboot)" = "788840" || { echo "::error::magiskboot drift"; exit 1; }
+          test "$(stat -c %s /tmp/AK3t/tools/magiskpolicy)" = "356584" || { echo "::error::magiskpolicy drift"; exit 1; }
+
+          cat > /tmp/ak3-anykernel.sh <<'AKSH'
+          ### AnyKernel3 Ramdisk Mod Script
+          ## marble LineageOS 24.0 (5.10.269) by lakitu12 (template: Numbersf/AnyKernel3, SukiSU app-compatible)
+          ## osm0sis @ xda-developers
+
+          ### AnyKernel setup
+          # global properties
+          properties() { '
+          kernel.string=marble LineageOS 24.0 5.10.269 DroidSpaces + SukiSU Ultra KPM by lakitu12
+          do.devicecheck=0
+          do.modules=0
+          do.systemless=0
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=marble
+          device.name2=marblein
+          supported.versions=
+          supported.patchlevels=
+          supported.vendorpatchlevels=
+          '; } # end properties
+
+          ### AnyKernel install
+          ## boot shell variables
+          BLOCK=boot
+          IS_SLOT_DEVICE=auto
+          RAMDISK_COMPRESSION=auto
+          PATCH_VBMETA_FLAG=auto
+          NO_MAGISK_CHECK=1
+
+          # import functions/variables and setup patching - see for reference (DO NOT REMOVE)
+          . tools/ak3-core.sh
+
+          sync
+          sleep 0.5
+          chmod -R 755 $AKHOME/tools
+
+          ui_print " Installing marble LineageOS 24.0 kernel..."
+          ui_print " Splitting boot, replacing kernel, keeping stock ramdisk"
+
+          split_boot
+          if [ -f "split_img/ramdisk.cpio" ]; then
+              unpack_ramdisk
+              write_boot
+          else
+              flash_boot
+          fi
+
+          ui_print " Done. Original ramdisk preserved."
+          AKSH
+
+          if [ "${{ matrix.variant }}" = "ksu" ]; then
+            IMG=/tmp/ak3-images/Image-ksu
+            OUT="AnyKernel3-marble-lineage24-5.10.269-DroidSpaces-SukiSU-KPM.zip"
+            RAW="Image-5.10.269-gki-droidspaces-lakitu-KSU-KPM"
+          else
+            IMG=/tmp/ak3-images/Image-bypass
+            OUT="AnyKernel3-marble-lineage24-5.10.269-DroidSpaces-BYPASS-noKSU.zip"
+            RAW="Image-5.10.269-gki-droidspaces-lakitu-BYPASS-noKSU"
+          fi
+          rm -rf /tmp/AnyKernel3
+          cp -r /tmp/AK3t /tmp/AnyKernel3
+          rm -rf /tmp/AnyKernel3/.git /tmp/AnyKernel3/anykernel.sh
+          cp -v "$IMG" /tmp/AnyKernel3/Image
+          cp -v /tmp/ak3-anykernel.sh /tmp/AnyKernel3/anykernel.sh
+          chmod +x /tmp/AnyKernel3/tools/* /tmp/AnyKernel3/META-INF/com/google/android/update-binary
+          ( cd /tmp/AnyKernel3 && zip -r9 -q "/tmp/artifacts/$OUT" . )
+          cp -v "$IMG" "/tmp/artifacts/$RAW"
+          echo "=== verify $OUT ==="
+          unzip -p "/tmp/artifacts/$OUT" anykernel.sh | grep -E "^BLOCK=boot" || { echo "::error::uppercase BLOCK missing"; exit 1; }
+          unzip -p "/tmp/artifacts/$OUT" anykernel.sh | grep -E "split_boot|write_boot" || { echo "::error::anykernel.sh missing install calls"; exit 1; }
+          unzip -p "/tmp/artifacts/$OUT" Image | strings | grep -m1 "droidspaces-lakitu" || { echo "::error::wrong Image packed"; exit 1; }
+          ls -lh /tmp/artifacts/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: marble-lineage24-5.10.269-${{ matrix.variant }}
+          path: /tmp/artifacts/*
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# marble GKI config fragment.
+#
+# Everything this build needs on top of the LineageOS GKI config lives here and
+# is merged after the vendor configs (see .github/scripts/gen-config.sh):
+#
+#   gki_defconfig
+#     + vendor/waipio_GKI.config + vendor/xiaomi_GKI.config
+#     + vendor/marble_GKI.config + vendor/debugfs.config   <- LineageOS chain
+#     + arch/arm64/configs/marble_gki.fragment             <- this file
+#
+# Keeping the delta here (instead of editing gki_defconfig in the CI) means
+# gki_defconfig stays byte-identical to LineageOS upstream, so a rebase onto a
+# newer lineage-24.0 never conflicts on it, and `git diff` against the import
+# commit is exactly "what we changed".
+#
+# Gate: .github/scripts/verify-tree.sh asserts this file and its contents exist
+# and that gki_defconfig stayed pristine; the CI version gate asserts the
+# *built* .config instead.
+
+# --- DroidSpaces (host containers: PID/IPC/UTS namespaces + SysV IPC) --------
+#
+# SYSVIPC only lands here because include/linux/sched.h carries the DroidSpaces
+# kABI padding: sysv_sem/sysv_shm were moved into ANDROID_KABI_RESERVE(6..8), so
+# enabling it does not move a field that the ROM's prebuilt vendor_dlkm modules
+# read. Same for POSIX_MQUEUE (mq_bytes lives in user_struct's ANDROID_KABI_USE(1)).
+CONFIG_SYSVIPC=y
+CONFIG_POSIX_MQUEUE=y
+CONFIG_IPC_NS=y
+CONFIG_PID_NS=y
+CONFIG_DEVTMPFS=y
+CONFIG_USER_NS=y
+CONFIG_TMPFS_XATTR=y
+CONFIG_TMPFS_POSIX_ACL=y
+
+# Container networking (DroidSpaces' recommended GKI set)
+CONFIG_MACVLAN=y
+CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+CONFIG_NETFILTER_XT_TARGET_REJECT=y
+CONFIG_NETFILTER_XT_TARGET_LOG=y
+CONFIG_NETFILTER_XT_MATCH_RECENT=y
+CONFIG_IP_SET=y
+CONFIG_IP_SET_HASH_IP=y
+CONFIG_IP_SET_HASH_NET=y
+CONFIG_NETFILTER_XT_SET=y
+CONFIG_IP6_NF_NAT=y
+CONFIG_IP6_NF_TARGET_MASQUERADE=y
+
+# --- SukiSU Ultra / KPM ------------------------------------------------------
+CONFIG_KPROBES=y
+CONFIG_KALLSYMS=y
+CONFIG_KALLSYMS_ALL=y
+
+# --- LTO: THIN instead of the stock FULL -------------------------------------
+#
+# Stock LineageOS marble uses LTO_CLANG_FULL; FULL LTO on a 5.10 + CFI kernel
+# needs ~16 GB+ for the link step and OOMs the 7 GB GitHub runners (the previous
+# CI switched it in the workflow). THIN is still real LTO, so CONFIG_CFI_CLANG
+# (and therefore CFI/BTI compatibility with the ROM's clang-22.0.2 vendor
+# modules) is untouched - verified on device 2026-10-16 (CI 38835130001).
+# Build with FULL locally if you have the RAM: drop these two lines.
+# CONFIG_LTO_CLANG_FULL is not set
+CONFIG_LTO_CLANG_THIN=y

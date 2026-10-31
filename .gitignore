@@ -163,3 +163,12 @@ arch/arm/boot/dts/vendor
 
 # Documentation toolchain
 sphinx_*/
+
+# --- marble repo extras (not part of the upstream tree) ---
+__pycache__/
+*.pyc
+# 上游 .gitignore 开头的 ".*" 规则会匹配任意深度的点开头路径，包括 .github/ ——
+# 已经 tracked 的老文件不受影响，但 `git add -A` 会**静默跳过**新加进去的文件
+# （dash 上就是这么丢过 verify-tree.sh 的）。把仓库自己拥有的点目录重新纳入。
+!.github/
+!.github/**
