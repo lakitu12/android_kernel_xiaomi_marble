@@ -55,6 +55,12 @@ echo "=== merge arch/arm64/configs/marble_gki.fragment ==="
 "$TREE/scripts/kconfig/merge_config.sh" -m -O "$OUT" "$OUT/.config" "$OURS" >/dev/null
 "${MK[@]}" olddefconfig >/dev/null
 
+# 必须再跑一次 syncconfig：setlocalversion 是从 include/config/auto.conf 里读
+# CONFIG_LOCALVERSION 的，而那份文件是上一次 olddefconfig 时的状态 —— 不在最后
+# 重算，版本串就会静默变成 5.10.269-droidspaces-lakitu（丢掉 vendor 链给的 -gki），
+# CI 里的版本门禁会挂在一个其实没问题的内核上。
+"${MK[@]}" syncconfig >/dev/null
+
 # 合并完立刻自检：跌回 LTO_NONE 或者丢一条 DroidSpaces 配置都是静默失败，
 # 编 20 分钟才发现没有意义。
 fail() { echo "::error::$*"; exit 1; }
@@ -64,4 +70,13 @@ grep -q '^CONFIG_SYSVIPC=y$' "$OUT/.config" || fail "SYSVIPC did not land"
 grep -q '^CONFIG_POSIX_MQUEUE=y$' "$OUT/.config" || fail "POSIX_MQUEUE did not land"
 grep -q '^CONFIG_PID_NS=y$' "$OUT/.config" || fail "PID_NS did not land"
 grep -q '^CONFIG_KALLSYMS_ALL=y$' "$OUT/.config" || fail "KALLSYMS_ALL did not land"
+
+if [ -n "$SUFFIX" ]; then
+	KREL=$("${MK[@]}" -s kernelrelease)
+	echo "kernelrelease: $KREL"
+	case "$KREL" in
+	*-gki"$SUFFIX") : ;;
+	*) fail "kernelrelease '$KREL' is not 5.10.269-gki$SUFFIX (CONFIG_LOCALVERSION from the vendor chain lost?)" ;;
+	esac
+fi
 echo "config OK: $(grep -E '^CONFIG_(LTO_CLANG_THIN|CFI_CLANG|SYSVIPC|POSIX_MQUEUE)=' "$OUT/.config" | tr '\n' ' ')"

@@ -1,150 +1,81 @@
-# How do I submit patches to Android Common Kernels
+# kernel_marble_droidspaces
 
-1. BEST: Make all of your changes to upstream Linux. If appropriate, backport to the stable releases.
-   These patches will be merged automatically in the corresponding common kernels. If the patch is already
-   in upstream Linux, post a backport of the patch that conforms to the patch requirements below.
-   - Do not send patches upstream that contain only symbol exports. To be considered for upstream Linux,
-additions of `EXPORT_SYMBOL_GPL()` require an in-tree modular driver that uses the symbol -- so include
-the new driver or changes to an existing driver in the same patchset as the export.
-   - When sending patches upstream, the commit message must contain a clear case for why the patch
-is needed and beneficial to the community. Enabling out-of-tree drivers or functionality is not
-not a persuasive case.
+marble（Redmi Note 12 Turbo / POCO F5，SM8450）的 **LineageOS 24.0 内核**：
+DroidSpaces（宿主容器）+ SukiSU Ultra（KPM）。仓库布局与方法论照
+[kernel_dash_droidspaces](https://github.com/lakitu12/android_kernel_xiaomi_dash)：
+**内核源码整个就在仓库根目录**，CI 编的就是 check in 的东西。
 
-2. LESS GOOD: Develop your patches out-of-tree (from an upstream Linux point-of-view). Unless these are
-   fixing an Android-specific bug, these are very unlikely to be accepted unless they have been
-   coordinated with kernel-team@android.com. If you want to proceed, post a patch that conforms to the
-   patch requirements below.
+与 dash 的唯一区别是**不做 KVM/EL2**那一套（marble 开不了），所以没有 gz、没有
+trusty-rescue、没有 `kvm-arm.mode=nvhe`；也没有 vendor hook 差额——基底本身就是
+ROM 出厂用的那棵树，KMI 天然对齐。
 
-# Common Kernel patch requirements
+## 仓库结构（`main`）
 
-- All patches must conform to the Linux kernel coding standards and pass `script/checkpatch.pl`
-- Patches shall not break gki_defconfig or allmodconfig builds for arm, arm64, x86, x86_64 architectures
-(see  https://source.android.com/setup/build/building-kernels)
-- If the patch is not merged from an upstream branch, the subject must be tagged with the type of patch:
-`UPSTREAM:`, `BACKPORT:`, `FROMGIT:`, `FROMLIST:`, or `ANDROID:`.
-- All patches must have a `Change-Id:` tag (see https://gerrit-review.googlesource.com/Documentation/user-changeid.html)
-- If an Android bug has been assigned, there must be a `Bug:` tag.
-- All patches must have a `Signed-off-by:` tag by the author and the submitter
+| 路径 | 内容 |
+|---|---|
+| 仓库根 | 完整内核树：LineageOS `android_kernel_xiaomi_sm8450` `lineage-24.0` @ `eff4b404`（Linux **5.10.269**，68,710 个文件） |
+| `arch/arm64/configs/marble_gki.fragment` | 我们的**全部**配置增量（DroidSpaces 的 namespace/SysV IPC/netfilter 集合、KSU 符号、LTO FULL→THIN） |
+| `include/linux/sched.h`、`sched/user.h` | DroidSpaces kABI padding（`sysv_sem`/`sysv_shm`/`mq_bytes` 挪进 Android ABI 预留位） |
+| `.github/scripts/gen-config.sh` | 配置唯一入口：LineageOS vendor 链 + 我们的 fragment（本地与 CI 同一份） |
+| `.github/scripts/verify-tree.sh` | 源码级门禁：树的身份 / kABI padding / gki_defconfig 是否被动过 |
+| `docs/` | 基底来历、版本冻结、上游 README 原文 |
 
-Additional requirements are listed below based on patch type
+> 根 `README.md` 是本仓库说明，覆盖了上游 kernel 的那份；上游原文留在
+> [`docs/upstream-kernel-README.md`](docs/upstream-kernel-README.md)。
+> 根 `.gitignore` = 上游那份 + 末尾追加的 `__pycache__/`、`*.pyc`、`!.github/**`。
 
-## Requirements for backports from mainline Linux: `UPSTREAM:`, `BACKPORT:`
+### 烘在树里的 delta 只有两条
 
-- If the patch is a cherry-pick from Linux mainline with no changes at all
-    - tag the patch subject with `UPSTREAM:`.
-    - add upstream commit information with a `(cherry picked from commit ...)` line
-    - Example:
-        - if the upstream commit message is
-```
-        important patch from upstream
+| 提交 | 内容 |
+|---|---|
+| `4da795e` | **DroidSpaces kABI padding**：`sysv_sem → ANDROID_KABI_RESERVE(6)`、`sysv_shm → KABI_REPLACE(7;8)`、`mq_bytes → user_struct 的 KABI_USE(1)`。于是开 `CONFIG_SYSVIPC`/`POSIX_MQUEUE` 不改任何布局，ROM 里预编译的几百个 vendor_dlkm 模块照旧能加载 |
+| `14ce48f` | 配置文件 + 构建/门禁脚本 + CI（`gki_defconfig` 保持上游原样，我们的配置一律进 fragment） |
 
-        This is the detailed description of the important patch
+不再有 `patches/` 目录，也不再在 CI 里给内核树打补丁（2026-10-31 起）。review 就是
+`git log`，回滚就是 `git revert`。
 
-        Signed-off-by: Fred Jones <fred.jones@foo.org>
-```
->- then Joe Smith would upload the patch for the common kernel as
-```
-        UPSTREAM: important patch from upstream
+## 构建
 
-        This is the detailed description of the important patch
+CI（GitHub Actions，push 到 `main` 或手动 `Run workflow`）：
 
-        Signed-off-by: Fred Jones <fred.jones@foo.org>
+- 矩阵 `ksu` / `bypass` 并行；产物是 AnyKernel3 zip + 裸 `Image`
+- 构建期唯一注入内核树的外部组件是 **SukiSU Ultra + KPM**（不入库，按 commit 钉死）
 
-        Bug: 135791357
-        Change-Id: I4caaaa566ea080fa148c5e768bb1a0b6f7201c01
-        (cherry picked from commit c31e73121f4c1ec41143423ac6ce3ce6dafdcec1)
-        Signed-off-by: Joe Smith <joe.smith@foo.org>
+本地（与 CI 等价，clang 必须和 ROM stock 内核同一个 release，见下）：
+
+```bash
+export PATH=~/clang/bin:$PATH            # clang r596125 (22.0.2)
+bash .github/scripts/verify-tree.sh .
+bash .github/scripts/gen-config.sh . out -droidspaces-lakitu
+make O=out ARCH=arm64 TARGET_PRODUCT=marble LLVM=1 LLVM_IAS=1 -j$(nproc) Image
 ```
 
-- If the patch requires any changes from the upstream version, tag the patch with `BACKPORT:`
-instead of `UPSTREAM:`.
-    - use the same tags as `UPSTREAM:`
-    - add comments about the changes under the `(cherry picked from commit ...)` line
-    - Example:
-```
-        BACKPORT: important patch from upstream
+`TARGET_PRODUCT=marble` 不是装饰：`drivers/input/Makefile` 按它加
+`-DCONFIG_TARGET_PRODUCT_MARBLE`。
 
-        This is the detailed description of the important patch
+### 工具链铁律（实机踩过，2026-10-16）
 
-        Signed-off-by: Fred Jones <fred.jones@foo.org>
+内核必须用 **clang r596125 (22.0.2)** 编——与 ROM stock 内核 `5.10.269-gki-geff4b40407a1`
+完全同一个 clang release。`CFI_CLANG`/BTI 的代码生成与校验 ABI 只在同一 release 内兼容：
+用 r547379 (20.0.0) 编出来的内核在 `__cfi_check` 第一次调 vendor 模块（`qcom_tsens`）
+时触发 `Bad mode ... code 0x36000002 -- BTI` → `Kernel panic - not syncing: bad mode`，
+0.3 秒重启循环。取证在 `~/code/probes/marble-lineage24-cfi-20261016/`。
 
-        Bug: 135791357
-        Change-Id: I4caaaa566ea080fa148c5e768bb1a0b6f7201c01
-        (cherry picked from commit c31e73121f4c1ec41143423ac6ce3ce6dafdcec1)
-        [joe: Resolved minor conflict in drivers/foo/bar.c ]
-        Signed-off-by: Joe Smith <joe.smith@foo.org>
-```
+LTO 用 `LTO_CLANG_THIN`（stock 是 `LTO_CLANG_FULL`）：FULL 的链接阶段要 16GB+，7GB 的
+GitHub runner 会 OOM；THIN 仍是真 LTO，`CONFIG_CFI_CLANG=y` 不受影响，已实机验证。
 
-## Requirements for other backports: `FROMGIT:`, `FROMLIST:`,
+## 刷入与验收
 
-- If the patch has been merged into an upstream maintainer tree, but has not yet
-been merged into Linux mainline
-    - tag the patch subject with `FROMGIT:`
-    - add info on where the patch came from as `(cherry picked from commit <sha1> <repo> <branch>)`. This
-must be a stable maintainer branch (not rebased, so don't use `linux-next` for example).
-    - if changes were required, use `BACKPORT: FROMGIT:`
-    - Example:
-        - if the commit message in the maintainer tree is
-```
-        important patch from upstream
+- AnyKernel3 zip 用 SukiSU 管理器或支持 AK3 的刷写器刷（保留原 ramdisk）
+- A/B 设备：手动刷 image 时两个槽都要刷（`boot_a` + `boot_b`）
+- 验收：`sys.boot_completed=1`、`uname -r` 为 `5.10.269-gki-droidspaces-lakitu`、
+  `su` 可用、`droidspaces check` 全绿
 
-        This is the detailed description of the important patch
+## 来源
 
-        Signed-off-by: Fred Jones <fred.jones@foo.org>
-```
->- then Joe Smith would upload the patch for the common kernel as
-```
-        FROMGIT: important patch from upstream
-
-        This is the detailed description of the important patch
-
-        Signed-off-by: Fred Jones <fred.jones@foo.org>
-
-        Bug: 135791357
-        (cherry picked from commit 878a2fd9de10b03d11d2f622250285c7e63deace
-         https://git.kernel.org/pub/scm/linux/kernel/git/foo/bar.git test-branch)
-        Change-Id: I4caaaa566ea080fa148c5e768bb1a0b6f7201c01
-        Signed-off-by: Joe Smith <joe.smith@foo.org>
-```
-
-
-- If the patch has been submitted to LKML, but not accepted into any maintainer tree
-    - tag the patch subject with `FROMLIST:`
-    - add a `Link:` tag with a link to the submittal on lore.kernel.org
-    - add a `Bug:` tag with the Android bug (required for patches not accepted into
-a maintainer tree)
-    - if changes were required, use `BACKPORT: FROMLIST:`
-    - Example:
-```
-        FROMLIST: important patch from upstream
-
-        This is the detailed description of the important patch
-
-        Signed-off-by: Fred Jones <fred.jones@foo.org>
-
-        Bug: 135791357
-        Link: https://lore.kernel.org/lkml/20190619171517.GA17557@someone.com/
-        Change-Id: I4caaaa566ea080fa148c5e768bb1a0b6f7201c01
-        Signed-off-by: Joe Smith <joe.smith@foo.org>
-```
-
-## Requirements for Android-specific patches: `ANDROID:`
-
-- If the patch is fixing a bug to Android-specific code
-    - tag the patch subject with `ANDROID:`
-    - add a `Fixes:` tag that cites the patch with the bug
-    - Example:
-```
-        ANDROID: fix android-specific bug in foobar.c
-
-        This is the detailed description of the important fix
-
-        Fixes: 1234abcd2468 ("foobar: add cool feature")
-        Change-Id: I4caaaa566ea080fa148c5e768bb1a0b6f7201c01
-        Signed-off-by: Joe Smith <joe.smith@foo.org>
-```
-
-- If the patch is a new feature
-    - tag the patch subject with `ANDROID:`
-    - add a `Bug:` tag with the Android bug (required for android-specific features)
-
+- 内核：<https://github.com/LineageOS/android_kernel_xiaomi_sm8450>（`lineage-24.0` @ `eff4b404`）
+- DroidSpaces：<https://github.com/ravindu644/Droidspaces-OSS>（kABI 补丁 `GKI/below-kernel-6.12`）
+- SukiSU Ultra：<https://github.com/SukiSU-Ultra/SukiSU-Ultra>
+- AnyKernel3 模板：<https://github.com/Numbersf/AnyKernel3>
+- 基底来历与重新导入流程：[docs/upstream-base.md](docs/upstream-base.md)
+- 版本冻结（clang / KSU / AK3）：[docs/version-pins.md](docs/version-pins.md)
