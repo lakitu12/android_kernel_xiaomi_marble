@@ -19,10 +19,12 @@ fail() { echo "::error::in-tree marble delta broken: $*"; exit 1; }
 SUB=$(grep -E '^[[:space:]]*SUBLEVEL[[:space:]]*=[[:space:]]*269' "$TREE/Makefile") \
 	|| fail "Makefile is not Linux 5.10.269 - the in-repo tree is not the LineageOS base"
 [ -n "$SUB" ] || fail "Makefile SUBLEVEL != 269"
-# 只有 LineageOS/qcom 树才有的东西：少了说明拿 AOSP common 顶替了
+# 只有 LineageOS/qcom 树才有的东西：少了说明拿 AOSP common 顶替了。
+# 注意只能用 **被 git 跟踪** 的路径：techpack/.gitignore 里有 "*/" 规则，techpack/stub
+# 在上游是被忽略的（那边由 build 时从 vendor 填），全新 clone 里根本没有它。
 for f in arch/arm64/configs/vendor/marble_GKI.config \
 	arch/arm64/configs/vendor/waipio_GKI.config \
-	techpack/stub drivers/gpu/msm drivers/soc/qcom \
+	techpack/Kbuild drivers/gpu/msm drivers/soc/qcom \
 	drivers/input/touchscreen/fst2 Android.bp; do
 	[ -e "$TREE/$f" ] || fail "$f missing - tree is not the LineageOS sm8450 base"
 done
