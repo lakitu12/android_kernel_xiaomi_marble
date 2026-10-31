@@ -71,7 +71,7 @@ builtin + `gki-android12-5.10` 的 SUSFS，所以 5.10 上的组合是存在过�
 | 基底 | 工具链 | KSU | 结果 |
 |---|---|---|---|
 | LineageOS `eff4b404` (5.10.269) | r596125 (22.0.2) | `dfae923` (v4.2.1-40994) | ✅ 2026-10-16 实测：CI `38835130001` 双变体绿；AK3 刷入 KSU-KPM 变体正常开机、KernelSU 激活、minidump 无新增崩溃 |
-| 同上（本条 + 完整树重构） | 同上 | 同上 | ✅ 2026-11-01 CI `41217178370` 双变体绿（ksu 26m30s / bypass 27m32s）；产物版本串/ikconfig 已复核；刷机待设备接入 |
+| 同上（本条 + 完整树重构） | 同上 | 同上 | ✅ 2026-11-01 CI `41217178370` 双变体绿；同晚实机 fastboot 刷 `boot_a`+`boot_b`：40s 开机、`su`→uid=0、`/proc/config.gz` 与 CI ikconfig 零差异、minidump 无新增。**管理器必须用 v4.2.1 线（UAPI 5）**；装 v4.3.0 管理器（UAPI 6）会显示红条「需要更新内核」，见 §6 注 |
 
 ## 6. 本次（完整树重构）的验证记录
 
@@ -83,7 +83,14 @@ builtin + `gki-android12-5.10` 的 SUSFS，所以 5.10 上的组合是存在过�
 | 干净克隆复现 | 从 `file://` 新 clone（只有 tracked 文件，= CI 看到的文件集）→ verify-tree 过 → 编过 → ikconfig 与工作树构建**逐行相同**（证明仓库自足，不依赖 tarball 里的残留文件） |
 | kABI 布局 | 见 §7：9908 个同名类型**一个都没变尺寸** |
 | CI | run `41217178370`（`de0df778`，2026-10-31 23:55Z 触发）：**双变体绿**，各 ~27 min；此前 `41209919015`/`41214550495` 红在 `techpack/stub`，见 §8 |
-| 上机 | 待刷（2026-11-01 00:20 查过 USB 无设备；产物已下到 `~/staging/ci-41217178370/`） |
+| 上机 | 2026-11-01 00:31+08:00：`magiskboot` 用旧 boot 镜像的 ramdisk + CI ksu `Image` 重打 boot（192MB），`fastboot flash boot_b` → 40s 进系统 → 再刷 `boot_a`（两槽同镜像）。验收：`sys.boot_completed=1`；`uname -r` = `5.10.269-gki-droidspaces-lakitu`（build 2026-10-31 16:03:39 UTC = CI 产物）；管理器里授权 Termux 后 `/system/bin/su -c id` = `uid=0(root) ... context=u:r:ksu:s0`；`/proc/config.gz` 与 CI Image 的 ikconfig **7755 行零差异**；minidump 与 2026-10-16 快照 **md5 相同**（无新增 dump）；pstore 空、mtdoops last-kmsg（#2036）无 panic。设备未装 DroidSpaces 工具，`droidspaces check` 未执行（配置层已由 ikconfig 证明） |
+
+> **KSU UAPI 注（2026-11-01）**：设备上的管理器是 v4.3.0 (41100-**6**)，`managerUAPI=6` >
+> 内核 `kernelUAPI=5`（pin `dfae923` 属 v4.2.1 线），管理器首页因此显示红色
+> 「需要更新内核」——源码 `HomeViewModel.kt:102` 就是
+> `requiresNewKernel = managerUAPIVersion > kernelUAPIVersion`。这不是内核故障：`su`、
+> `ksud feature list` 都正常。要消掉红条，二选一：① 管理器退回 v4.2.1（40994，UAPI 5）；
+> ② 内核 pin 提到 v4.3.0 线（`e67b14e6`，UAPI 6）重编——后者要过一遍 build+刷机验证。
 
 §6 里那次本地构建的命令就是 README 里那四条，没有别的魔法。
 
