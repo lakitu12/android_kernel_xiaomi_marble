@@ -3,12 +3,12 @@
 > 这份文档是「为什么钉这个」的唯一出处。改 pin 必须同时改这里、CI 里的 `env:` 和
 > 本文末尾的验证记录。
 
-## 1. 现状（2026-10-31）
+## 1. 现状（2026-11-01）
 
 | 组件 | 钉住的对象 | 位置 | 说明 |
 |---|---|---|---|
 | clang | `clang-r596125`（22.0.2，AOSP `main-kernel`） | CI `CLANG_URL` | **必须**与 ROM stock 内核同一个 release，见 §2 |
-| SukiSU Ultra | `main` 线 `dfae92378135`（v4.2.1-40994） | CI `KSU_PIN` | 构建期注入，不入库；**不带 SUSFS**，见 §3 |
+| SukiSU Ultra | `main` 线 `e67b14e6bbbb`（v4.3.0 tag，**UAPI 6**） | CI `KSU_PIN` | 构建期注入，不入库；**不带 SUSFS**；必须和管理器 APK 同一 UAPI 线，见 §3 |
 | AnyKernel3 | `Numbersf/AnyKernel3` `0fc75698` | CI `AK3_PIN` | SukiSU 管理器能认的大写变量版式；另加 magiskboot/magiskpolicy 体积门禁 |
 | DroidSpaces kABI 补丁 | `001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8` + `002.5.10_or_lower_…posix_mqueue` | **树内提交** `4da795e` | 已经烘进树，不再按 pin 拉取；来源 ravindu644/Droidspaces-OSS `GKI/below-kernel-6.12/` |
 | 内核基底 | LineageOS sm8450 `eff4b404`（5.10.269） | 树本身 | 见 [upstream-base.md](upstream-base.md) |
@@ -31,16 +31,23 @@ Kernel panic - not syncing: bad mode
 ROM 哪天换内核工具链，这里必须跟着换：对照 `uname -v`/`strings Image | grep 'Linux version'`
 里的 `-g<hash>` 找到 stock 内核对应 revision，再取同一个 `clang-rXXXXXX`。
 
-## 3. 为什么 KSU 用 main 线且没有 SUSFS
+## 3. 为什么 KSU 用 main 线、没有 SUSFS、且必须和管理器同 UAPI
 
 `lineage-24.0` 这条线一开始就是按 **main 线 stable** 建的，原因是当时 SukiSU 的
 `builtin` 分支（唯一带 `KSU_SUSFS*` Kconfig 的分支）处于半合并状态：2026-10-15 的
 HEAD 里 `ksu_manager_cmd`、重复的 `KSU_IOCTL_KPM`、`TRACK_THRONE` 都编不过，而 main 线
 一编就过。当时的选择是「先有能开机的 root」，SUSFS 留空。
 
-`dfae923`（v4.2.1-40994）是当时的 stable tip，特征：main 线 `kernel/Kconfig` 里
+最初钉的是 `dfae923`（v4.2.1-40994，**UAPI 5**），特征：main 线 `kernel/Kconfig` 里
 `config KSU_SUSFS` **0 项**，所以工作流里没有任何 `CONFIG_KSU_SUSFS*`，
 `CONFIG_KSU=y` + `CONFIG_KPM=y` 就是全部。
+
+**2026-11-01 换成 `e67b14e6`（v4.3.0 tag，UAPI 6）**：设备上的管理器是 v4.3.0
+(41100-**6**)，而 UAPI 5 的内核在管理器里会触发
+`requiresNewKernel = managerUAPIVersion > kernelUAPIVersion`（`HomeViewModel.kt:102`）：
+首页红条「需要更新内核」，并且 ksud 的 `ensure_uapi_version_matched` 会让所有写操作
+直接失败——表现就是「管理器 GUI 什么都点不动」。v4.3.0 tag 与 v4.2.1 同为 main 线、
+同样没有 `KSU_SUSFS`，UAPI 升到 6，管理器与内核对齐后 GUI 恢复正常（见 §6）。
 
 **升级到 builtin + SUSFS 的路径**（想做的时候照这个来，别直接换）：
 
@@ -71,26 +78,27 @@ builtin + `gki-android12-5.10` 的 SUSFS，所以 5.10 上的组合是存在过�
 | 基底 | 工具链 | KSU | 结果 |
 |---|---|---|---|
 | LineageOS `eff4b404` (5.10.269) | r596125 (22.0.2) | `dfae923` (v4.2.1-40994) | ✅ 2026-10-16 实测：CI `38835130001` 双变体绿；AK3 刷入 KSU-KPM 变体正常开机、KernelSU 激活、minidump 无新增崩溃 |
-| 同上（本条 + 完整树重构） | 同上 | 同上 | ✅ 2026-11-01 CI `41217178370` 双变体绿；同晚实机 fastboot 刷 `boot_a`+`boot_b`：40s 开机、`su`→uid=0、`/proc/config.gz` 与 CI ikconfig 零差异、minidump 无新增。**管理器必须用 v4.2.1 线（UAPI 5）**；装 v4.3.0 管理器（UAPI 6）会显示红条「需要更新内核」，见 §6 注 |
+| 同上（本条 + 完整树重构） | 同上 | `e67b14e6` (v4.3.0, **UAPI 6**) | ✅ 2026-11-01 CI `41217178370` 双变体绿；实机 fastboot 刷 `boot_a`+`boot_b`：40s 开机、`su`→uid=0、`/proc/config.gz` 与构建 ikconfig 零差异、minidump 无新增；管理器 v4.3.0(UAPI 6) 红条消失、GUI 可操作 |
 
 ## 6. 本次（完整树重构）的验证记录
 
 | 项 | 值 |
 |---|---|
-| 本地构建 | 2026-10-31 22:10，clang r596125 (22.0.2)，`make -j20` **5m11s**，`Image` 37MB / `vmlinux` 508MB（15GB 机器，LTO 链接阶段吃 swap） |
+| 本地构建 | 2026-10-31 22:10 首编 **5m11s**；2026-11-01 00:54 换 KSU v4.3.0 重编 **5m14s**（同机 -j20）；`Image` 37MB |
 | 版本串 | `Linux version 5.10.269-gki-droidspaces-lakitu (lakitu@localhost) (Android (15682573 … clang version 22.0.2 …) #1 SMP PREEMPT` |
 | ikconfig | `LTO_CLANG_THIN=y` + `# CONFIG_LTO_CLANG_FULL is not set` + `CFI_CLANG=y` + `SYSVIPC/POSIX_MQUEUE/IPC_NS/PID_NS/DEVTMPFS/USER_NS/KALLSYMS_ALL/KPROBES/MACVLAN/IP_SET=y` |
 | 干净克隆复现 | 从 `file://` 新 clone（只有 tracked 文件，= CI 看到的文件集）→ verify-tree 过 → 编过 → ikconfig 与工作树构建**逐行相同**（证明仓库自足，不依赖 tarball 里的残留文件） |
 | kABI 布局 | 见 §7：9908 个同名类型**一个都没变尺寸** |
 | CI | run `41217178370`（`de0df778`，2026-10-31 23:55Z 触发）：**双变体绿**，各 ~27 min；此前 `41209919015`/`41214550495` 红在 `techpack/stub`，见 §8 |
-| 上机 | 2026-11-01 00:31+08:00：`magiskboot` 用旧 boot 镜像的 ramdisk + CI ksu `Image` 重打 boot（192MB），`fastboot flash boot_b` → 40s 进系统 → 再刷 `boot_a`（两槽同镜像）。验收：`sys.boot_completed=1`；`uname -r` = `5.10.269-gki-droidspaces-lakitu`（build 2026-10-31 16:03:39 UTC = CI 产物）；管理器里授权 Termux 后 `/system/bin/su -c id` = `uid=0(root) ... context=u:r:ksu:s0`；`/proc/config.gz` 与 CI Image 的 ikconfig **7755 行零差异**；minidump 与 2026-10-16 快照 **md5 相同**（无新增 dump）；pstore 空、mtdoops last-kmsg（#2036）无 panic。设备未装 DroidSpaces 工具，`droidspaces check` 未执行（配置层已由 ikconfig 证明） |
+| 上机 | 2026-11-01 00:31 先刷 CI ksu 产物（pin `dfae923`，UAPI 5）验证基底，40s 开机；01:00 换 `e67b14e6`（v4.3.0，UAPI 6）重编后重刷 `boot_b`+`boot_a`。`magiskboot` 用旧 boot 镜像的 ramdisk + 新 `Image` 重打 192MB boot。验收：`sys.boot_completed=1`；`uname -r` = `5.10.269-gki-droidspaces-lakitu`（本地 build 2026-11-01 00:54:17）；管理器里授权 Termux 后 `/system/bin/su -c id` = `uid=0(root) ... context=u:r:ksu:s0`；`ksud 4.3.0 (uapi: 6)` 的 `feature list`/`module list` rc=0；管理器「需要更新内核」红条消失、内核完整版本 `v4.3.0-e67b14e6@HEAD`、拓展功能页可加载；`/proc/config.gz` 与构建 ikconfig **7755 行零差异**；minidump 与 2026-10-16 快照 **md5 相同**（无新增 dump）；pstore 空、mtdoops last-kmsg（#2036）无 panic。设备未装 DroidSpaces 工具，`droidspaces check` 未执行（配置层已由 ikconfig 证明） |
 
-> **KSU UAPI 注（2026-11-01）**：设备上的管理器是 v4.3.0 (41100-**6**)，`managerUAPI=6` >
-> 内核 `kernelUAPI=5`（pin `dfae923` 属 v4.2.1 线），管理器首页因此显示红色
-> 「需要更新内核」——源码 `HomeViewModel.kt:102` 就是
-> `requiresNewKernel = managerUAPIVersion > kernelUAPIVersion`。这不是内核故障：`su`、
-> `ksud feature list` 都正常。要消掉红条，二选一：① 管理器退回 v4.2.1（40994，UAPI 5）；
-> ② 内核 pin 提到 v4.3.0 线（`e67b14e6`，UAPI 6）重编——后者要过一遍 build+刷机验证。
+> **KSU UAPI 注（2026-11-01 已解决）**：原 pin `dfae923`（v4.2.1，UAPI 5）与设备管理器
+> v4.3.0 (41100-**6**) 不匹配——管理器首页红条「需要更新内核」（源码
+> `HomeViewModel.kt:102`：`requiresNewKernel = managerUAPIVersion > kernelUAPIVersion`），
+> 且 ksud 的 `ensure_uapi_version_matched` 让所有写操作失败，表现就是 GUI 基本点不动。
+> 把 pin 提到 `e67b14e6`（v4.3.0 tag，UAPI 6）重编刷入后：红条消失、`ksud feature list`/
+> `module list` rc=0、`su` 正常。**以后换 KSU pin 必须同时看管理器的 UAPI**（v4.2.1 = 5，
+> v4.3.0 = 6）。
 
 §6 里那次本地构建的命令就是 README 里那四条，没有别的魔法。
 

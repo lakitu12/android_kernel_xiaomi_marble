@@ -29,12 +29,15 @@ env:
   # code 0x36000002 -- BTI" + "Kernel panic - not syncing: bad mode" (qcom_tsens, ~0.3s),
   # captured in the device minidump partition 2026-10-16. Source: clang main-kernel branch.
   CLANG_URL: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main-kernel/clang-r596125.tar.gz
-  # SukiSU Ultra stable v4.2.1-40994 (main line, pinned commit).
+  # SukiSU Ultra stable v4.3.0 (main line tag, UAPI 6, pinned commit).
   # NOTE: SUSFS is a `builtin`-branch-only feature and is intentionally not part of
   # this build; the builtin branch could not be used at the time (its 2026-10-15 head
   # half-merged #987 and fails to compile: ksu_manager_cmd / duplicate KSU_IOCTL_KPM /
   # TRACK_THRONE - all fine on the main line). See docs/version-pins.md.
-  KSU_PIN: dfae923781350cb5113e0763a17e90cc4edd59b4
+  # The pin MUST stay on the same UAPI line as the manager APK people install:
+  # v4.2.1 = UAPI 5, v4.3.0 = UAPI 6. A mismatch makes ksud refuse every write
+  # (manager home shows "kernel update required", superuser/module actions fail).
+  KSU_PIN: e67b14e6bbbbd3e67f24df658a01d3e73a64159c
   # Numbersf/AnyKernel3 template (SukiSU-app compatible, uppercase vars)
   AK3_PIN: 0fc7569866bb5d5fe51752cc410dca3e92ab332f
 

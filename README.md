@@ -63,12 +63,14 @@ make O=out ARCH=arm64 TARGET_PRODUCT=marble LLVM=1 LLVM_IAS=1 -j$(nproc) Image
   `sysv_sem`/`sysv_shm`/`mq_bytes` 正好落在 `android_kabi_reserved6..8` / `reserved1` 上
   → ROM 里预编译的 vendor_dlkm 模块按原偏移访问是安全的。证据与复现命令见
   [docs/version-pins.md §7](docs/version-pins.md)。
-- **实机（2026-11-01）**：CI ksu 产物用 `magiskboot` 换掉旧 boot 镜像里的 kernel（保留原
-  ramdisk）后 `fastboot flash` 到 `boot_b`+`boot_a`，~40s 开机；`uname -r` =
-  `5.10.269-gki-droidspaces-lakitu`（build 2026-10-31 16:03:39 UTC，= CI 产物）；在管理器里
-  授权一个 app 后 `/system/bin/su -c id` → `uid=0`（`u:r:ksu:s0`）；`/proc/config.gz` 与 CI
-  `Image` 的 ikconfig **7755 行零差异**；minidump 与 2026-10-16 快照 **md5 相同**（无新增
-  崩溃 dump），pstore 空、dmesg 无 panic。
+- **实机（2026-11-01）**：`magiskboot` 用旧 boot 镜像的 ramdisk + 新 `Image` 重打 boot 后
+  `fastboot flash` 到 `boot_b`+`boot_a`，~40s 开机；`uname -r` =
+  `5.10.269-gki-droidspaces-lakitu`；管理器里授权一个 app 后 `/system/bin/su -c id` →
+  `uid=0`（`u:r:ksu:s0`）；`/proc/config.gz` 与构建出的 ikconfig **7755 行零差异**；
+  minidump 与 2026-10-16 快照 **md5 相同**（无新增崩溃 dump），pstore 空、dmesg 无 panic。
+- **KSU 管理器（2026-11-01）**：pin 从 v4.2.1（UAPI 5）提到 v4.3.0（UAPI 6）后，设备上的
+  v4.3.0 管理器红条「需要更新内核」消失，超级用户/模块（`ksud`）操作恢复；换 pin 时必须
+  同时看管理器 UAPI，见 [docs/version-pins.md §3](docs/version-pins.md)。
 
 ### 工具链铁律（实机踩过，2026-10-16）
 
@@ -85,9 +87,10 @@ GitHub runner 会 OOM；THIN 仍是真 LTO，`CONFIG_CFI_CLANG=y` 不受影响�
 
 - AnyKernel3 zip 用 SukiSU 管理器或支持 AK3 的刷写器刷（保留原 ramdisk）
 - A/B 设备：手动刷 image 时两个槽都要刷（`boot_a` + `boot_b`）
-- **管理器要和内核 UAPI 对上**：本仓库 KSU pin 在 v4.2.1 线（UAPI 5），管理器用
-  v4.2.1（40994）；装 v4.3.0 管理器（UAPI 6）首页会出现红条「需要更新内核」——
-  那是版本门禁，root 功能不受影响（见 [docs/version-pins.md §6](docs/version-pins.md) 注）
+- **管理器要和内核 UAPI 对上**：本仓库 KSU pin 在 v4.3.0 线（UAPI 6），管理器用
+  v4.3.0（41100，UAPI 6）；装 v4.2.1 管理器（UAPI 5）会提示「需要更新管理器」，
+  反之 v4.3.0 管理器配 UAPI 5 内核会红条「需要更新内核」且 ksud 写操作全失败
+  （见 [docs/version-pins.md §6](docs/version-pins.md) 注）
 - 验收：`sys.boot_completed=1`、`uname -r` 为 `5.10.269-gki-droidspaces-lakitu`、
   授权一个 app 后 `/system/bin/su -c id` → `uid=0`、`/proc/config.gz` 与 CI `Image` 的
   ikconfig diff 为空、minidump 无新增；`droidspaces check` 需要设备装有 DroidSpaces 工具
