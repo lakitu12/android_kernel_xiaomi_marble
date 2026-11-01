@@ -106,20 +106,24 @@ logcat 缓冲里有 **99 个崩溃进程**（systemui 50 + launcher3 49），其
 incfs 的 abort message；手机发烫（电池 37°C+）、屏幕闪烁。排障过程（每一步都是
 实机 A/B）：
 
-| 变体（都是 builtin，除注明） | fatal / incfs abort | 结论 |
-|---|---|---|
-| SUSFS 全开 + KP | **49 / 57** | 复现 |
-| SUSFS 全开、无 KP | 0 / 0 | **与 KP 无关** |
-| main 线 KSU + KP、无 SUSFS | 0 / 0 | main 线的 mount_hide 是「过滤内容」，不是「拒绝打开」 |
-| SUSFS 去掉 `SUS_MOUNT` + KP | 0 / 0 | 触发点落在「umount 名单」这条链路上 |
-| SUSFS 去掉 `SUS_PATH` + KP | 0 / 0 | 同上（`SUS_PATH` 也会往名单里塞进程） |
-| SUSFS 只留核心、其余全关 + KP | 0 / 0 | 同上 |
-| **SUSFS 全开 + KP、`mount_hide` 默认关** | **0 / 0** | 根因坐实 |
+**决定性的对照是「同一份源码只改一个默认值」**（都是解锁后 12 秒计数）：
 
-「关掉某个 SUSFS 子项就不崩」当时差点被读成「SUSFS 的锅」，其实是：builtin 的
-`mount_hide` 只对 **`ksu_uid_should_umount()` 为真的 uid** 返回 `-ENOENT`，而
-`SUS_MOUNT` / `SUS_PATH` 正是把这些 app uid 塞进 umount 名单的那两条路——名单一空，
-钩子就直接 `return 0`，看起来像「修好了」。真正该改的只有 `mount_hide` 自己。
+| 变体 | fatal / incfs abort | 说明 |
+|---|---|---|
+| builtin KSU、**无 SUSFS**、`mount_hide` 默认 `true` | **69 / 77** | 崩溃与 SUSFS 无关 |
+| 同上，只把默认值改成 `false`，别的字节不动 | **0 / 0** | 根因坐实 |
+| SUSFS 全开 + KP、`mount_hide` 默认 `true` | 49 / 57 | 同一机制，另一组配置 |
+| SUSFS 全开 + KP、`mount_hide` 关 / open 恒成功 | 0 / 0 | 修法验证 |
+| main 线 KSU + KP，`mount_hide` ENABLED | 0 / 0 | 那份实现是过滤内容，不拒绝 open |
+
+**为什么一开始看起来像 SUSFS 的问题**：最早复现是在 SUSFS + KP 的镜像上，随后「把
+`SUS_MOUNT` / `SUS_PATH` 某个子项关掉」的几个变体都测出 0，于是误判成「某个 SUSFS 子项
+把 app 塞进了 umount 名单」。这个解释站不住——builtin 单独跑（SUSFS 一个字节都没有）
+照样 69/77 崩。真实原因是**触发时机**：`mount_hide` 的门控是
+`is_appuid(uid) && ksu_uid_should_umount(uid)`，而 `default_non_root_profile.umount_modules`
+在 `policy/allowlist.c` 里初始化就是 `true`，所以**任何未授权 su 的 app 都命中**；是否
+当场炸，取决于那个窗口里有没有 app 去打开 `/proc/mounts`（libincfs 加载未压缩 APK 条目
+时就会）。那些 0 结果只是时间窗内的假阴性，不能当成因果。
 
 崩溃日志里的真信号不是「层」而是这一行：
 
@@ -132,7 +136,7 @@ libincfs 的 `MountRegistry` 构造时 `std::ifstream("/proc/mounts")`，失败�
 `PLOG(FATAL)`；而 builtin 的 `feature/mount_hide.c` 对「该 umount 的 app 进程」把
 `/proc/{mounts,mountinfo,mountstats}` 的 open 直接返回 `-ENOENT`——于是**任何映射了未
 压缩 APK 条目的进程**都会 abort。main 线没有这个问题：它的同名功能是 653 行、过滤文件
-内容，而 builtin 这版是 30 行的「直接失败」。
+内容，而 builtin 这版（整文件 165 行）的核心钩子只有几行，就是直接 `return -ENOENT`。
 
 修法（`.github/scripts/patch-ksu-builtin.py`，三处都是严格匹配 + 断言）：
 
