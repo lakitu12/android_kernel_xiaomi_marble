@@ -138,6 +138,8 @@ libincfs 的 `MountRegistry` 构造时 `std::ifstream("/proc/mounts")`，失败�
 压缩 APK 条目的进程**都会 abort。main 线没有这个问题：它的同名功能是 653 行、过滤文件
 内容，而 builtin 这版（整文件 165 行）的核心钩子只有几行，就是直接 `return -ENOENT`。
 
+上游已报：<https://github.com/SukiSU-Ultra/SukiSU-Ultra/issues/1035>（2026-11-01，带 A/B 计数与 libincfs 完整调用链；最新 builtin head `464f9201` 仍是 `-ENOENT` + 默认开）。上游修好之前，下面的本地补丁继续生效。
+
 修法（`.github/scripts/patch-ksu-builtin.py`，三处都是严格匹配 + 断言）：
 
 1. `feature/mount_hide.c`：默认值 `true → false`，并把 open 钩子改成恒成功（`return 0`），
