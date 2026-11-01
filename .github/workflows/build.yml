@@ -66,7 +66,7 @@ jobs:
             curl zip unzip tar xz-utils gcc g++ gawk openssl \
             gcc-aarch64-linux-gnu device-tree-compiler
 
-      # android.googlesource.com 偶尔会把这份 ~1.5GB 的 tar.gz 在传输中途截断，而
+      # android.googlesource.com 偶尔会把这份 ~1.1GB 的 tar.gz（实测 1,092,448,329 B）在传输中途截断，而
       # HTTP 层看起来是成功的：curl 退出 0，直到 tar 才炸成
       # "gzip: stdin: unexpected end of file / tar: Unexpected EOF in archive"
       # （2026-11-01 run 41222918907 两个变体均如此，各花了 6 分钟）。所以下载完必须
