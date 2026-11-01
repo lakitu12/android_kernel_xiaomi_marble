@@ -73,6 +73,17 @@ make O=out ARCH=arm64 TARGET_PRODUCT=marble LLVM=1 LLVM_IAS=1 -j$(nproc) Image
   同时看管理器 UAPI，见 [docs/version-pins.md §3](docs/version-pins.md)。该 pin 的 CI
   `41269038858` 双变体绿，其 ksu 产物 ikconfig 与实机刷入的本地构建**逐行相同**（7755 行，
   0 diff）。
+- **CI 产物直接上机（2026-11-01 11:57）**：刷的就是 CI 下载的 `Image`，构建时间戳
+  `Sun Nov 1 03:33:03 UTC 2026` 对得上 run 时刻；`boot_a`/`boot_b` 两槽都刷同一个镜像；
+  `su`、`ksud`（含 `feature set` 写操作）、管理器首页全部正常；`/proc/config.gz` 与 CI
+  `Image` 的 ikconfig 7755 行 0 diff；minidump md5 与 10-16 基线逐字节相同。
+- **容器实跑（2026-11-01，首次）**：`droidspaces v7.1.0 check` 的 `[MUST HAVE]` 与
+  `[RECOMMENDED]` **全绿**（仅两个 `[OPTIONAL]` 的 `--cpus`/`--pids-limit` 缺
+  `CFS_BANDWIDTH`/`CGROUP_PIDS`——stock GKI 本来就没开，官方文档也明确不要往 GKI 里加清单外
+  的项）。用 Alpine 3.22.1 minirootfs 起容器成功：`RUNNING`、容器内 `uname -r` 是
+  `5.10.269-gki-droidspaces-lakitu`、`/etc/alpine-release` = 3.22.1、`nproc` = 8，`stop`
+  优雅退出。⚠️ `/data` 是 `nosuid,nodev`（Android 设计），rootfs 放在 /data 里时容器内的
+  setuid 程序（su/sudo/passwd）不可用，需要这类功能请用 `--rootfs-img` 稀疏镜像。
 
 ### 工具链铁律（实机踩过，2026-10-16）
 
