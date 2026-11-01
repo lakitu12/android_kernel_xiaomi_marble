@@ -51,7 +51,7 @@ builtin 有三处构建期问题，由 `.github/scripts/patch-ksu-builtin.py` �
 
 ## SUSFS：烘进树
 
-SUSFS 是 5.10 专用补丁（dash 那套 6.6 的不能复用），改 `fs/`、`mm/`、`kernel/`、
+SUSFS 是 5.10 专用补丁，6.6 的补丁不能复用；它改 `fs/`、`mm/`、`kernel/`、
 `security/selinux/` 共 27 个文件，属于树本身的形状，所以整份烘进树，提交 `5332250`。
 
 重放方式：

@@ -13,8 +13,7 @@
 | 规模 | 68,756 个被跟踪文件，加我们自己的 8 个；`.git` 打包后约 450MB |
 
 选它的理由：这就是 marble 的 LineageOS 24.0 ROM 出厂内核，ROM 里 `vendor_dlkm`、
-`vendor_boot` 的几百个 `.ko` 都是对着这棵树编的，vermagic、KMI、CFI 天然对齐，不需要
-像 dash 那样补 vendor hook。
+`vendor_boot` 的几百个 `.ko` 都是对着这棵树编的，vermagic、KMI、CFI 天然对齐。
 
 ## 导入
 
@@ -60,10 +59,8 @@ rsync -rcnl --exclude=.git --exclude=.github --exclude=docs \
 
 ## 为什么只有一个提交
 
-dash 需要真实历史，是因为它要做 dash-w-oss + ACK 6.6.89 + ACK 6.6.118 三方合并，
-合并基底本身就是一个 commit。marble 只有一个上游修订，没有要合的东西；真历史帮不上忙，
-浅拉取进来的 Linux 1.2M commit 还会把仓库撑到几个 GB。所以这里导入成一个提交，
-provenance 写在提交信息和本文里。需要真历史时按需挂：
+marble 只有一个上游修订，没有要合的东西；真历史帮不上忙，浅拉取进来的 Linux 1.2M
+commit 还会把仓库撑到几个 GB。所以这里导入成一个提交，provenance 写在提交信息和本文里。需要真历史时按需挂：
 
 ```bash
 git remote add lineage https://github.com/LineageOS/android_kernel_xiaomi_sm8450

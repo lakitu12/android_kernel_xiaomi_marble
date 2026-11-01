@@ -16,9 +16,7 @@ KernelPatch 两样，都不入库，按 commit 钉死。
 - SukiSU Ultra `builtin`：构建期注入 `drivers/kernelsu`，UAPI 6
 - KernelPatch：构建期把 kpimg 预补丁进 Image，KPM 才能用
 
-和 [kernel_dash_droidspaces](https://github.com/lakitu12/android_kernel_xiaomi_dash) 的
-区别是不做 KVM/EL2（marble 开不了），因此没有 gz、trusty-rescue、`kvm-arm.mode=nvhe`；
-基底本身就是 ROM 出厂那棵树，KMI 天然对齐，不需要补 vendor hook。
+基底就是 ROM 出厂用的那棵树，vermagic、KMI、CFI 天然对齐，不需要补 vendor hook。
 
 ## 仓库结构
 
