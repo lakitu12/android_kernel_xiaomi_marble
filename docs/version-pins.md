@@ -77,8 +77,8 @@ builtin + `gki-android12-5.10` 的 SUSFS，所以 5.10 上的组合是存在过�
 
 | 基底 | 工具链 | KSU | 结果 |
 |---|---|---|---|
-| LineageOS `eff4b404` (5.10.269) | r596125 (22.0.2) | `dfae923` (v4.2.1-40994) | ✅ 2026-10-16 实测：CI `38835130001` 双变体绿；AK3 刷入 KSU-KPM 变体正常开机、KernelSU 激活、minidump 无新增崩溃 |
-| 同上（本条 + 完整树重构） | 同上 | `e67b14e6` (v4.3.0, **UAPI 6**) | ✅ 2026-11-01 CI `41217178370` 双变体绿；实机 fastboot 刷 `boot_a`+`boot_b`：40s 开机、`su`→uid=0、`/proc/config.gz` 与构建 ikconfig 零差异、minidump 无新增；管理器 v4.3.0(UAPI 6) 红条消失、GUI 可操作 |
+| LineageOS `eff4b404` (5.10.269) | r596125 (22.0.2) | `dfae923` (v4.2.1-40994, **UAPI 5**) | ✅ 2026-10-16 实测：CI `38835130001` 双变体绿；AK3 刷入 KSU-KPM 变体正常开机、KernelSU 激活、minidump 无新增崩溃。2026-11-01 完整树重构后 CI `41217178370` 双变体绿 + 实机 fastboot 刷入：40s 开机、`su`→uid=0、`/proc/config.gz` 与 CI ikconfig 零差异、minidump 无新增。⚠️ 这一条**只配 v4.2.1 管理器**；v4.3.0 管理器会红条且写操作被 UAPI 校验挡住 |
+| 同上（完整树重构） | 同上 | `e67b14e6` (v4.3.0 tag, **UAPI 6**) | ✅ 2026-11-01 本地重编（5m14s）后实机 fastboot 刷 `boot_a`+`boot_b`：40s 开机、`su`→uid=0、`ksud 4.3.0 (uapi: 6)`、管理器 v4.3.0 红条消失、GUI 可操作、`/proc/config.gz` 与构建 ikconfig 零差异、minidump 无新增；CI 记录见 §8 |
 
 ## 6. 本次（完整树重构）的验证记录
 
@@ -89,7 +89,7 @@ builtin + `gki-android12-5.10` 的 SUSFS，所以 5.10 上的组合是存在过�
 | ikconfig | `LTO_CLANG_THIN=y` + `# CONFIG_LTO_CLANG_FULL is not set` + `CFI_CLANG=y` + `SYSVIPC/POSIX_MQUEUE/IPC_NS/PID_NS/DEVTMPFS/USER_NS/KALLSYMS_ALL/KPROBES/MACVLAN/IP_SET=y` |
 | 干净克隆复现 | 从 `file://` 新 clone（只有 tracked 文件，= CI 看到的文件集）→ verify-tree 过 → 编过 → ikconfig 与工作树构建**逐行相同**（证明仓库自足，不依赖 tarball 里的残留文件） |
 | kABI 布局 | 见 §7：9908 个同名类型**一个都没变尺寸** |
-| CI | run `41217178370`（`de0df778`，2026-10-31 23:55Z 触发）：**双变体绿**，各 ~27 min；此前 `41209919015`/`41214550495` 红在 `techpack/stub`，见 §8 |
+| CI | run `41217178370`（`de0df778`，pin 仍是 `dfae923`/UAPI 5）：**双变体绿**，各 ~27 min；此前 `41209919015`/`41214550495` 红在 `techpack/stub`，见 §8。换 pin 后的 `41222918907` 红在下载截断（基础设施），见 §8 |
 | 上机 | 2026-11-01 00:31 先刷 CI ksu 产物（pin `dfae923`，UAPI 5）验证基底，40s 开机；01:00 换 `e67b14e6`（v4.3.0，UAPI 6）重编后重刷 `boot_b`+`boot_a`。`magiskboot` 用旧 boot 镜像的 ramdisk + 新 `Image` 重打 192MB boot。验收：`sys.boot_completed=1`；`uname -r` = `5.10.269-gki-droidspaces-lakitu`（本地 build 2026-11-01 00:54:17）；管理器里授权 Termux 后 `/system/bin/su -c id` = `uid=0(root) ... context=u:r:ksu:s0`；`ksud 4.3.0 (uapi: 6)` 的 `feature list`/`module list` rc=0；管理器「需要更新内核」红条消失、内核完整版本 `v4.3.0-e67b14e6@HEAD`、拓展功能页可加载；`/proc/config.gz` 与构建 ikconfig **7755 行零差异**；minidump 与 2026-10-16 快照 **md5 相同**（无新增 dump）；pstore 空、mtdoops last-kmsg（#2036）无 panic。设备未装 DroidSpaces 工具，`droidspaces check` 未执行（配置层已由 ikconfig 证明） |
 
 > **KSU UAPI 注（2026-11-01 已解决）**：原 pin `dfae923`（v4.2.1，UAPI 5）与设备管理器
@@ -138,3 +138,4 @@ pahole -s A/vmlinux > sizes-a.txt; pahole -s B/vmlinux > sizes-b.txt
 | `41209919015` | `a81d0e75` | ❌ 两变体都挂在 `verify-tree.sh`：`techpack/stub missing` —— 那是上游 `.gitignore`（`techpack/.gitignore` 的 `*/`）吃掉的 7 个 tracked 文件之一，见 [upstream-base.md](upstream-base.md) 的 import 自检 |
 | `41214550495` | `440e4a84` | ❌ 门禁修好了，但树里仍缺 `techpack/stub` → `make` 报 `scripts/Makefile.build:45: .../techpack/stub/Makefile: No such file` |
 | `41217178370` | `de0df778` | ✅ 双变体绿。build 步骤 18–19 min（与 2026-10-16 的 18m43s 相当），总 27 min。产物已下载核对：`Image-5.10.269-gki-droidspaces-lakitu-{KSU-KPM,BYPASS-noKSU}` 版本串为 `5.10.269-gki-droidspaces-lakitu`，ksu 变体 ikconfig 有 `KSU/KPM=y`、bypass 没有；AK3 zip 里 `BLOCK=boot`/`IS_SLOT_DEVICE=auto`/`NO_MAGISK_CHECK=1`，magiskboot 788840 B、magiskpolicy 356584 B，zip 内 `Image` 版本串正确 |
+| `41222918907` | `b3cf5cec` | ❌ 基础设施，不是代码问题：`Fetch clang prebuilt` 阶段 android.googlesource.com 把 ~1.5GB 的 tar.gz 传到一半截断（curl 退出 0、`gzip: unexpected end of file` / `tar: Unexpected EOF in archive`），两个变体各耗 ~6 min 后挂。修法：下载后 `gzip -t` 验完整性 + 最多 4 次整份重下（`build.yml`），坏包只损失一次尝试而不是后面的编译 |
