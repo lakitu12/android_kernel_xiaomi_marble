@@ -39,16 +39,13 @@ env:
   # code 0x36000002 -- BTI" + "Kernel panic - not syncing: bad mode" (qcom_tsens, ~0.3s),
   # captured in the device minidump partition 2026-10-16. Source: clang main-kernel branch.
   CLANG_URL: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main-kernel/clang-r596125.tar.gz
-  # SukiSU Ultra `builtin` branch (UAPI 6), pinned. This is the line to be on:
-  # it is the only one that ships the CONFIG_KSU_SUSFS* knobs and the
-  # ksu_susfs_* supercalls, and 2026-10-30's head (b16e899a) is exactly the
-  # "fix 0b666cad breaks clang GKI builds" commit. The main line (v4.3.0 tag)
-  # has zero KSU_SUSFS options, so SUSFS is impossible there - see
-  # docs/version-pins.md §3 for why the earlier "builtin does not compile"
-  # note no longer holds and what the three local fixes are.
-  # The pin MUST stay on the same UAPI line as the manager APK people install:
-  # v4.2.1 = UAPI 5, v4.3.0 = UAPI 6. A mismatch makes ksud refuse every write
-  # (manager home shows "kernel update required", superuser/module actions fail).
+  # SukiSU Ultra `builtin` branch (UAPI 6), pinned. Only this branch ships the
+  # CONFIG_KSU_SUSFS* knobs and the ksu_susfs_* supercalls; the main line has
+  # none, so SUSFS is impossible there.
+  # The pin must stay on the same UAPI line as the manager APK: v4.2.1 = UAPI 5,
+  # v4.3.0 = UAPI 6. A mismatch makes ksud refuse every write.
+  # Three build-time fixes are applied by patch-ksu-builtin.py; see
+  # docs/version-pins.md, section "SukiSU：用 builtin 分支".
   KSU_PIN: b16e899a555e9b96aa1225f049cd7274820ca5b8
   # susfs4ksu is committed into the tree (commit 5332250), so CI does NOT replay
   # the patch. The pin is recorded so the delta can be re-derived byte-for-byte:
