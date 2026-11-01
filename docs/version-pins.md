@@ -101,16 +101,25 @@ superkey 每次构建随机生成、不入库：KPM 走的是 SukiSU 的 superca
 
 ### 3.4 mount_hide：一次把手机烤热的崩溃循环，和它的根因
 
-2026-11-01，SUSFS + KP 一起上机后 SystemUI/launcher 进崩溃循环，90 秒 100 次
-SIGABRT，手机发烫、屏幕闪烁。排障过程（每一步都是实机 A/B）：
+2026-11-01，SUSFS + KP 一起上机后 SystemUI/launcher 进崩溃循环：一个 90 秒的
+logcat 缓冲里有 **99 个崩溃进程**（systemui 50 + launcher3 49），其中 57 条是
+incfs 的 abort message；手机发烫（电池 37°C+）、屏幕闪烁。排障过程（每一步都是
+实机 A/B）：
 
-| 变体 | 结果 | 结论 |
+| 变体（都是 builtin，除注明） | fatal / incfs abort | 结论 |
 |---|---|---|
-| SUSFS 全开 + KP | 崩 | 组合有问题 |
-| SUSFS 全开、无 KP | 也崩 | **与 KP 无关** |
-| SUSFS 去掉 `SUS_PATH` | 不崩 | 当时的误判：以为 `SUS_PATH` 是祸首 |
-| KSU（无 SUSFS）+ KP | 不崩 | KSU 侧有嫌疑 |
-| KSU（无 SUSFS）、无 KP | 也崩 | 锁定在 KSU 自身 |
+| SUSFS 全开 + KP | **49 / 57** | 复现 |
+| SUSFS 全开、无 KP | 0 / 0 | **与 KP 无关** |
+| main 线 KSU + KP、无 SUSFS | 0 / 0 | main 线的 mount_hide 是「过滤内容」，不是「拒绝打开」 |
+| SUSFS 去掉 `SUS_MOUNT` + KP | 0 / 0 | 触发点落在「umount 名单」这条链路上 |
+| SUSFS 去掉 `SUS_PATH` + KP | 0 / 0 | 同上（`SUS_PATH` 也会往名单里塞进程） |
+| SUSFS 只留核心、其余全关 + KP | 0 / 0 | 同上 |
+| **SUSFS 全开 + KP、`mount_hide` 默认关** | **0 / 0** | 根因坐实 |
+
+「关掉某个 SUSFS 子项就不崩」当时差点被读成「SUSFS 的锅」，其实是：builtin 的
+`mount_hide` 只对 **`ksu_uid_should_umount()` 为真的 uid** 返回 `-ENOENT`，而
+`SUS_MOUNT` / `SUS_PATH` 正是把这些 app uid 塞进 umount 名单的那两条路——名单一空，
+钩子就直接 `return 0`，看起来像「修好了」。真正该改的只有 `mount_hide` 自己。
 
 崩溃日志里的真信号不是「层」而是这一行：
 
@@ -183,6 +192,7 @@ libincfs 的 `MountRegistry` 构造时 `std::ifstream("/proc/mounts")`，失败�
 | 上机（**CI 产物**，2026-11-01 11:57） | CI `41269038858` 的 `Image-…-KSU-KPM` 用 magiskboot 重打后刷 `boot_a`+`boot_b`，**两槽都换成同一个 CI 镜像**（先 `--set-active=a` 验，再 `--set-active=b` 回滚位），每次 ~40s 进系统。**`uname -a` 的 build 时间是 `Sun Nov 1 03:33:03 UTC 2026` = CI run 的构建时刻**（不是本地 00:54 那次）→ 确认跑的就是 CI 产物。`su`→`uid=0 … u:r:ksu:s0`；`ksud 4.3.0 (uapi: 6)`；`feature list`/`module list` rc=0，**`feature set sulog 1/0` 写操作 rc=0**（UAPI 校验通过）；管理器 v4.3.0 (41100-6) 首页无红条、内核完整版本 `v4.3.0-e67b14e6@HEAD`；`/proc/config.gz` 与 CI `Image` 的 ikconfig **7755 行 0 diff**；minidump md5 `ff5dc1f4…` 与 2026-10-16 基线**逐字节相同**；pstore 空、dmesg 无 panic/Oops |
 | DroidSpaces `check`（**首次**，v7.1.0） | 全部 `[MUST HAVE]`（root/Linux version/PID・Mount・UTS・IPC ns/pivot_root/proc/sys/seccomp）与 `[RECOMMENDED]`（epoll/signalfd/PTY/devpts/loop/ext4/cgroup v2/cgroup ns/devtmpfs）**全绿**；仅两个 `[OPTIONAL]` 为 ✗：CPU limit（`CONFIG_CFS_BANDWIDTH`）、Process limit（`CONFIG_CGROUP_PIDS`）——两者在 stock GKI `gki_defconfig` 里本来就没开，官方 GKI 清单也明确写「**DO NOT** enable anything other than the recommended GKI configuration」，故不动；缺它们只影响 `--cpus`/`--pids-limit`，工具自己标注「skipped if absent」 |
 | 上机（**SUSFS + KPM**，2026-11-01 17:58） | `out-full` 的 Image（build 戳 `Sun Nov 1 17:56:59 CST 2026`）经 `kptools -p` 预补丁、magiskboot 重打成 192MB boot 刷 `boot_a`。验收：解锁（`input keyevent 82`）后 `adb logcat` 里 `Fatal signal 6 .*(launcher3|systemui)` **0 次**、`Failed to open the /proc/mounts` **0 次**、`mCurrentFocus` = launcher3；Termux 里 `/system/bin/su -c sh /sdcard/vf.sh` 得到 `uid=0(root) gid=0(root) context=u:r:ksu:s0`；`ksud 4.3.0 (uapi: 6)`；`feature list` 里 `mount_hide` = DISABLED（预期，见 §3.4）、`ksud kpm list` rc=0 且无报错、管理器拓展页 `[AVAILABLE] kpm (ID=0)`；`dmesg` 有 `KP KernelPatch Version: e00`、`KP sukisu_kpm_supercall_install done: 0`、`susfs is initialized! version: v2.3.0`；管理器截图：内核 `v4.3.0-b16e899a@HEAD`、`SuSFS 版本 v2.3.0 (SUSFS Inline Hook)`、`KPM (0 KPM)`、无红条 |
+| 上机（**CI 产物**，2026-11-01 19:00，`41297579532`） | 下载 CI 的 `Image-…-KSU-KPM-SUSFS`（41,152,112 B）用 magiskboot 重打后刷 `boot_a`，45s 开机。**`uname -v` = `#1 SMP PREEMPT Sun Nov 1 10:38:26 UTC 2026` = 该 CI 构建时刻**；`/proc/config.gz` 与产物 ikconfig **7768 行 0 diff**（10 个 `CONFIG_KSU_SUSFS*=y`、`KSU=y`、`KPM=y`）；`kptools -l` 对产物 `patched=true` / `version=0xe00`；解锁后 `Fatal signal 6 .*(launcher3|systemui)` **0 次**、`Failed to open the /proc/mounts` **0 次**、焦点 launcher3；Termux 里 `su -c` → `uid=0(root) ... context=u:r:ksu:s0`（su 由 `su_compat` 提供，app 进程里 `/system/bin/su` 才可见，adbd-root 上下文里不存在）；`ksud 4.3.0 (uapi: 6)`、`kpm list` rc=0、`susfs status`=true、`susfs version`=v2.3.0、`feature list` 里 `mount_hide`=DISABLED；`dmesg`：`KP KernelPatch Version: e00`、`KP sukisu_kpm_supercall_install done: 0`、`susfs is initialized! version: v2.3.0`；minidump md5 `ff5dc1f4…` 与 10-16 基线一致；管理器截图 `probes/marble-ci-41269038858/ci41297579532_manager.png`（`v4.3.0-b16e899a@HEAD`、`SuSFS v2.3.0 (SUSFS Inline Hook)`、`KPM 0`、超级用户 4）|
 | 容器实跑（**首次**，2026-11-01 12:13） | Alpine 3.22.1 minirootfs（3.8MB）解到 `/data/local/tmp/rootfs`，`droidspaces -n smoke --net=none start` → **RUNNING（PID 8590，Alpine Linux v3.22，hostname smoke，SELinux Enforcing）**；容器内 `cat /etc/alpine-release` = `3.22.1`、`id` = `uid=0`、`uname -r` = `5.10.269-gki-droidspaces-lakitu`、`nproc` = 8、`/proc/1` 在；`stop` 优雅退出、`show` 清空。⚠️ 启动时警告 `Failed to remount /data with suid support`——`/data` 是 `nosuid,nodev` 的 f2fs（Android 设计如此，非内核缺陷），所以 setuid 类程序（su/sudo/passwd）在 /data 上的 rootfs 里失效；要做这类事用 `--rootfs-img` 稀疏镜像（App 也推荐这个） |
 
 > **KSU UAPI 注（2026-11-01 已解决）**：原 pin `dfae923`（v4.2.1，UAPI 5）与设备管理器
@@ -233,3 +243,4 @@ pahole -s A/vmlinux > sizes-a.txt; pahole -s B/vmlinux > sizes-b.txt
 | `41217178370` | `de0df778` | ✅ 双变体绿。build 步骤 18–19 min（与 2026-10-16 的 18m43s 相当），总 27 min。产物已下载核对：`Image-5.10.269-gki-droidspaces-lakitu-{KSU-KPM,BYPASS-noKSU}` 版本串为 `5.10.269-gki-droidspaces-lakitu`，ksu 变体 ikconfig 有 `KSU/KPM=y`、bypass 没有；AK3 zip 里 `BLOCK=boot`/`IS_SLOT_DEVICE=auto`/`NO_MAGISK_CHECK=1`，magiskboot 788840 B、magiskpolicy 356584 B，zip 内 `Image` 版本串正确 |
 | `41222918907` | `b3cf5cec` | ❌ 基础设施，不是代码问题：`Fetch clang prebuilt` 阶段 android.googlesource.com 把 ~1.1GB 的 tar.gz 传到一半截断（curl 退出 0、`gzip: unexpected end of file` / `tar: Unexpected EOF in archive`），两个变体各耗 ~6 min 后挂。修法：下载后 `gzip -t` 验完整性 + 最多 4 次整份重下（`build.yml`），坏包只损失一次尝试而不是后面的编译 |
 | `41269038858` | `f591e74c` | ✅ 双变体绿（ksu 23m06s、bypass 18m39s），用的就是修好的下载步骤。产物下载核对：两个 `Image` 版本串都是 `5.10.269-gki-droidspaces-lakitu`；ksu 变体 `CONFIG_KSU=y`/`KSU_MANUAL_SU=y`/`KPM=y`、bypass 三者全无；ikconfig 分别 7755/7744 行；AK3 zip `BLOCK=boot`/`IS_SLOT_DEVICE=auto`/`NO_MAGISK_CHECK=1`、`magiskboot` 788840 B、`magiskpolicy` 356584 B。**ksu `Image` 的 ikconfig 与 2026-11-01 实机刷入验证过的本地 v4.3.0 构建逐行相同（0 diff）** |
+| `41297579532` | `272ab099` | ✅ 双变体绿（ksu **30m04s**、bypass 23m03s；ksu 多出来的 ~7 min 是 KernelPatch 步骤：clone KP → 编 kptools → 下 kpimg → 预补丁）。这一步同时验证了所有新门禁：`verify-tree.sh` 的 SUSFS 断言、`config KSU_SUSFS*`=10、`patch-ksu-builtin.py` 三处修补、`CONFIG_KSU_SUSFS*=y`=10、产物里 `susfs is initialized! version: v2.3.0` + `KernelPatch Version:`、`kptools -l` = `patched=true`/`version=0xe00`。产物核对：ksu Image 41,152,112 B、bypass 38,428,876 B；ksu ikconfig **7768 行**、与本地干净克隆构建**逐行相同**；AK3 zip 里 `BLOCK=boot`/`IS_SLOT_DEVICE=auto`、`magiskboot` 788840 B、`magiskpolicy` 356584 B。**该产物已直接刷机验收**（见 §6）|

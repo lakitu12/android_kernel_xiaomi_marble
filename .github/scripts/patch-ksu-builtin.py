@@ -30,8 +30,9 @@ loudly instead of producing a subtly broken kernel.
 
        Abort message: 'Failed to open the /proc/mounts file: No such file or directory'
 
-   Measured on marble 2026-11-01: 100 SIGABRTs in 90s, phone hot, SystemUI in a
-   restart loop. Main line (v4.3.0) does not have this problem: its mount_hide
+   Measured on marble 2026-11-01: 99 crashed processes in one logcat buffer
+   (systemui 50 + launcher3 49), 57 of them with the incfs abort message, phone hot,
+   SystemUI in a restart loop. Main line (v4.3.0) does not have this problem: its mount_hide
    filters the *contents* of those files instead of failing the open. That
    implementation is 653 lines and needs hooks this fork does not ship
    (ksu_patch_text/patch_memory), so we keep the feature plumbing but (a) default

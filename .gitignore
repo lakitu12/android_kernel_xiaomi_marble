@@ -175,5 +175,7 @@ __pycache__/
 
 # SukiSU Ultra 是构建期注入的（CI env 的 KSU_PIN + kernel/setup.sh），不属于本仓库；
 # 忽略掉，免得本地 `git add -A` 把上千个 KSU 文件卷进提交。
-/drivers/kernelsu/
+# 注意 setup.sh 建的是**符号链接** drivers/kernelsu -> ../KernelSU/kernel，所以这里
+# 不能写带尾斜杠的 "/drivers/kernelsu/"（那个只匹配真目录，匹配不到符号链接）。
+/drivers/kernelsu
 /KernelSU/
