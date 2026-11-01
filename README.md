@@ -70,7 +70,9 @@ make O=out ARCH=arm64 TARGET_PRODUCT=marble LLVM=1 LLVM_IAS=1 -j$(nproc) Image
   minidump 与 2026-10-16 快照 **md5 相同**（无新增崩溃 dump），pstore 空、dmesg 无 panic。
 - **KSU 管理器（2026-11-01）**：pin 从 v4.2.1（UAPI 5）提到 v4.3.0（UAPI 6）后，设备上的
   v4.3.0 管理器红条「需要更新内核」消失，超级用户/模块（`ksud`）操作恢复；换 pin 时必须
-  同时看管理器 UAPI，见 [docs/version-pins.md §3](docs/version-pins.md)。
+  同时看管理器 UAPI，见 [docs/version-pins.md §3](docs/version-pins.md)。该 pin 的 CI
+  `41269038858` 双变体绿，其 ksu 产物 ikconfig 与实机刷入的本地构建**逐行相同**（7755 行，
+  0 diff）。
 
 ### 工具链铁律（实机踩过，2026-10-16）
 
