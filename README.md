@@ -34,7 +34,7 @@ KernelPatch 两样，都不入库，按 commit 钉死。
 | `docs/` | 基底来历、版本冻结、上游 README 原文 |
 
 树里的 delta 只有三个提交：kABI padding（`4da795e`）、SUSFS 2.3.0（`5332250`）、
-配置与 CI（`14ce48f`）。没有 `patches/` 目录，`git log` 就是 review，回滚用 `git revert`。
+配置与 CI（`14ce48f`）。改动全在提交里，review 用 `git log`，回滚用 `git revert`。
 
 ## 构建
 
@@ -48,7 +48,7 @@ CI 在 push 到 `main` 或手动 `Run workflow` 时跑，矩阵两个变体：
 本地构建与 CI 等价：
 
 ```bash
-export PATH=~/clang/bin:$PATH            # clang r596125 (22.0.2)
+export PATH=<clang-r596125>/bin:$PATH    # clang r596125 (22.0.2)
 bash .github/scripts/verify-tree.sh .
 
 # 注入 SukiSU builtin，修三处，打开 KSU/SUSFS 配置

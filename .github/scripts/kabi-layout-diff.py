@@ -14,7 +14,7 @@
 
   pahole 需要带 DWARF/BTF 的 vmlinux，因此两次构建都要有 CONFIG_DEBUG_INFO=y。
 
-  ./kabi-layout-diff.py ~/build/marble-ours/vmlinux ~/build/marble-stock/vmlinux
+  ./kabi-layout-diff.py out/.config-ours/vmlinux out/.config-stock/vmlinux
 
   # 顺带核单个结构体的字段偏移（最有用的两处）：
   pahole -C task_struct ours/vmlinux | grep -E 'sysvsem|sysvshm|reserved[678]'
