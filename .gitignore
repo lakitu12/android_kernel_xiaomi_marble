@@ -172,3 +172,8 @@ __pycache__/
 # （dash 上就是这么丢过 verify-tree.sh 的）。把仓库自己拥有的点目录重新纳入。
 !.github/
 !.github/**
+
+# SukiSU Ultra 是构建期注入的（CI env 的 KSU_PIN + kernel/setup.sh），不属于本仓库；
+# 忽略掉，免得本地 `git add -A` 把上千个 KSU 文件卷进提交。
+/drivers/kernelsu/
+/KernelSU/
