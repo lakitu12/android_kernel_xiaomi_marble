@@ -1,7 +1,8 @@
 # kernel_marble_droidspaces
 
 marble（Redmi Note 12 Turbo / POCO F5，SM8450）的 **LineageOS 24.0 内核**：
-DroidSpaces（宿主容器）+ SukiSU Ultra（KPM）。仓库布局与方法论照
+DroidSpaces（宿主容器）+ SukiSU Ultra（KPM + SUSFS 2.3.0，SUSFS 侧烘进树）+
+KernelPatch 预补丁。仓库布局与方法论照
 [kernel_dash_droidspaces](https://github.com/lakitu12/android_kernel_xiaomi_dash)：
 **内核源码整个就在仓库根目录**，CI 编的就是 check in 的东西。
 
@@ -14,7 +15,7 @@ ROM 出厂用的那棵树，KMI 天然对齐。
 | 路径 | 内容 |
 |---|---|
 | 仓库根 | 完整内核树：LineageOS `android_kernel_xiaomi_sm8450` `lineage-24.0` @ `eff4b404`（Linux **5.10.269**，68,710 个文件） |
-| `arch/arm64/configs/marble_gki.fragment` | 我们的**全部**配置增量（DroidSpaces 的 namespace/SysV IPC/netfilter 集合、KSU 符号、LTO FULL→THIN） |
+| `arch/arm64/configs/marble_gki.fragment` | 我们的**全部**配置增量（DroidSpaces 的 namespace/SysV IPC/netfilter 集合、LTO FULL→THIN）；KSU/SUSFS 的符号由 CI 注入（它们要等 `setup.sh` 把 `drivers/kernelsu` 放进来才存在） |
 | `include/linux/sched.h`、`sched/user.h` | DroidSpaces kABI padding（`sysv_sem`/`sysv_shm`/`mq_bytes` 挪进 Android ABI 预留位） |
 | `.github/scripts/gen-config.sh` | 配置唯一入口：LineageOS vendor 链 + 我们的 fragment（本地与 CI 同一份） |
 | `.github/scripts/verify-tree.sh` | 源码级门禁：树的身份 / kABI padding / gki_defconfig 是否被动过 |
@@ -25,30 +26,48 @@ ROM 出厂用的那棵树，KMI 天然对齐。
 > [`docs/upstream-kernel-README.md`](docs/upstream-kernel-README.md)。
 > 根 `.gitignore` = 上游那份 + 末尾追加的 `__pycache__/`、`*.pyc`、`!.github/**`。
 
-### 烘在树里的 delta 只有两条
+### 烘在树里的 delta
 
 | 提交 | 内容 |
 |---|---|
 | `4da795e` | **DroidSpaces kABI padding**：`sysv_sem → ANDROID_KABI_RESERVE(6)`、`sysv_shm → KABI_REPLACE(7;8)`、`mq_bytes → user_struct 的 KABI_USE(1)`。于是开 `CONFIG_SYSVIPC`/`POSIX_MQUEUE` 不改任何布局，ROM 里预编译的几百个 vendor_dlkm 模块照旧能加载 |
+| `5332250` | **SUSFS 2.3.0**：`susfs4ksu` `gki-android12-5.10` @ `3c8f72e` 整份烘进树（27 改 + 3 新，含 `fs/susfs.c`）。理由和 kABI 补丁一样：它改的是树本身的形状（`fs/`、`mm/`、`security/selinux/`），烘进来 CI 就仍然只编 check in 的东西 |
 | `14ce48f` | 配置文件 + 构建/门禁脚本 + CI（`gki_defconfig` 保持上游原样，我们的配置一律进 fragment） |
 
 不再有 `patches/` 目录，也不再在 CI 里给内核树打补丁（2026-10-31 起）。review 就是
-`git log`，回滚就是 `git revert`。
+`git log`，回滚就是 `git revert`。构建期只剩两件**不属于本仓库**的注入：SukiSU
+（`drivers/kernelsu`，含 `patch-ksu-builtin.py` 的三处修补）和 KernelPatch 预补丁。
 
 ## 构建
 
 CI（GitHub Actions，push 到 `main` 或手动 `Run workflow`）：
 
 - 矩阵 `ksu` / `bypass` 并行；产物是 AnyKernel3 zip + 裸 `Image`
-- 构建期唯一注入内核树的外部组件是 **SukiSU Ultra + KPM**（不入库，按 commit 钉死）
+- ksu 变体 = SukiSU `builtin`（UAPI 6）+ 10 个 SUSFS 功能 + KernelPatch 预补丁
+- 构建期注入内核树的外部组件只有两个（都不入库，按 commit 钉死）：**SukiSU Ultra**
+  和 **KernelPatch/kpimg**
 
 本地（与 CI 等价，clang 必须和 ROM stock 内核同一个 release，见下）：
 
 ```bash
 export PATH=~/clang/bin:$PATH            # clang r596125 (22.0.2)
 bash .github/scripts/verify-tree.sh .
+
+# ksu 变体：注入 SukiSU builtin（pin 见 CI env），再修三处 + 打开 KSU/SUSFS 配置
+KSU_PIN=b16e899a555e9b96aa1225f049cd7274820ca5b8
+curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/$KSU_PIN/kernel/setup.sh" | bash -s "$KSU_PIN"
+python3 .github/scripts/patch-ksu-builtin.py .
 bash .github/scripts/gen-config.sh . out -droidspaces-lakitu
+for c in KSU KPM KSU_SUSFS KSU_SUSFS_SUS_PATH KSU_SUSFS_SUS_MOUNT KSU_SUSFS_SUS_KSTAT \
+        KSU_SUSFS_SPOOF_UNAME KSU_SUSFS_ENABLE_LOG KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+        KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG KSU_SUSFS_OPEN_REDIRECT KSU_SUSFS_SUS_MAP; do
+  sed -i "/^# CONFIG_${c} is not set/d; /^CONFIG_${c}=/d" out/.config; echo "CONFIG_${c}=y" >> out/.config
+done
+make O=out ARCH=arm64 TARGET_PRODUCT=marble LLVM=1 LLVM_IAS=1 olddefconfig
 make O=out ARCH=arm64 TARGET_PRODUCT=marble LLVM=1 LLVM_IAS=1 -j$(nproc) Image
+
+# KPM 要 KernelPatch 预补丁（ksu 变体才有意义；步骤见 .github/workflows/build.yml）
+# kptools -p -i out/arch/arm64/boot/Image -k kpimg -S <superkey> -o Image-kp
 ```
 
 `TARGET_PRODUCT=marble` 不是装饰：`drivers/input/Makefile` 按它加
@@ -77,6 +96,12 @@ make O=out ARCH=arm64 TARGET_PRODUCT=marble LLVM=1 LLVM_IAS=1 -j$(nproc) Image
   `Sun Nov 1 03:33:03 UTC 2026` 对得上 run 时刻；`boot_a`/`boot_b` 两槽都刷同一个镜像；
   `su`、`ksud`（含 `feature set` 写操作）、管理器首页全部正常；`/proc/config.gz` 与 CI
   `Image` 的 ikconfig 7755 行 0 diff；minidump md5 与 10-16 基线逐字节相同。
+- **SUSFS + KPM（2026-11-01 17:58）**：SUSFS 10 个功能全开 + KernelPatch 预补丁刷入后，
+  解锁 **0 次 SIGABRT**、launcher 有焦点、`ksud kpm list` rc=0（旧 pin 是 `os error 95`）、
+  `dmesg` 有 `KP KernelPatch Version: e00` 与 `susfs is initialized! version: v2.3.0`，
+  管理器首页无红条、SUSFS/KPM 两张卡都在。⚠️ 必须带 `patch-ksu-builtin.py`：builtin 的
+  `mount_hide` 会把 `/proc/mounts` 的 open 返回 `-ENOENT`，libincfs 直接 abort，SystemUI
+  进崩溃循环（根因与 A/B 记录见 [docs/version-pins.md §3.4](docs/version-pins.md)）。
 - **容器实跑（2026-11-01，首次）**：`droidspaces v7.1.0 check` 的 `[MUST HAVE]` 与
   `[RECOMMENDED]` **全绿**（仅两个 `[OPTIONAL]` 的 `--cpus`/`--pids-limit` 缺
   `CFS_BANDWIDTH`/`CGROUP_PIDS`——stock GKI 本来就没开，官方文档也明确不要往 GKI 里加清单外
@@ -100,10 +125,13 @@ GitHub runner 会 OOM；THIN 仍是真 LTO，`CONFIG_CFI_CLANG=y` 不受影响�
 
 - AnyKernel3 zip 用 SukiSU 管理器或支持 AK3 的刷写器刷（保留原 ramdisk）
 - A/B 设备：手动刷 image 时两个槽都要刷（`boot_a` + `boot_b`）
-- **管理器要和内核 UAPI 对上**：本仓库 KSU pin 在 v4.3.0 线（UAPI 6），管理器用
+- **管理器要和内核 UAPI 对上**：本仓库 KSU pin 在 `builtin` 线（UAPI 6），管理器用
   v4.3.0（41100，UAPI 6）；装 v4.2.1 管理器（UAPI 5）会提示「需要更新管理器」，
   反之 v4.3.0 管理器配 UAPI 5 内核会红条「需要更新内核」且 ksud 写操作全失败
-  （见 [docs/version-pins.md §6](docs/version-pins.md) 注）
+  （见 [docs/version-pins.md §3.1](docs/version-pins.md)）
+- **mount_hide 在管理器里显示 DISABLED 是预期**：builtin 这版实现会让任何读
+  `/proc/mounts` 的 app 进程 abort（libincfs），已由 `patch-ksu-builtin.py` 关掉；
+  挂载隐藏由 SUSFS 的 `sus_mount` 负责
 - 验收：`sys.boot_completed=1`、`uname -r` 为 `5.10.269-gki-droidspaces-lakitu`、
   授权一个 app 后 `/system/bin/su -c id` → `uid=0`、`/proc/config.gz` 与 CI `Image` 的
   ikconfig diff 为空、minidump 无新增；`droidspaces check` 需要设备装有 DroidSpaces 工具
@@ -112,7 +140,10 @@ GitHub runner 会 OOM；THIN 仍是真 LTO，`CONFIG_CFI_CLANG=y` 不受影响�
 
 - 内核：<https://github.com/LineageOS/android_kernel_xiaomi_sm8450>（`lineage-24.0` @ `eff4b404`）
 - DroidSpaces：<https://github.com/ravindu644/Droidspaces-OSS>（kABI 补丁 `GKI/below-kernel-6.12`）
-- SukiSU Ultra：<https://github.com/SukiSU-Ultra/SukiSU-Ultra>
+- SukiSU Ultra：<https://github.com/SukiSU-Ultra/SukiSU-Ultra>（`builtin` 线）
+- SUSFS：<https://gitlab.com/simonpunk/susfs4ksu>（`gki-android12-5.10` @ `3c8f72e`）
+- KernelPatch（KPM 后端）：<https://github.com/bmax121/KernelPatch>（`d4c88d6`）
+- kpimg：<https://github.com/ShirkNeko/SukiSU_patch>（`eec45788`）
 - AnyKernel3 模板：<https://github.com/Numbersf/AnyKernel3>
 - 基底来历与重新导入流程：[docs/upstream-base.md](docs/upstream-base.md)
 - 版本冻结（clang / KSU / AK3）：[docs/version-pins.md](docs/version-pins.md)
