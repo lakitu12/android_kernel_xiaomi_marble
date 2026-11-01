@@ -64,15 +64,32 @@ grep -q '^# CONFIG_LTO_CLANG_FULL is not set$' "$FRAG" \
 grep -q 'arch/arm64/configs/marble_gki.fragment' "$TREE/.github/scripts/gen-config.sh" \
 	|| fail "gen-config.sh does not merge marble_gki.fragment"
 
+# ------------------------------------------------ SUSFS 已经烘进树
+# susfs4ksu gki-android12-5.10 @ 3c8f72e 的整份 delta 是树里的提交（5332250）。
+# 少了它不会「编不过」——builtin 的 Kconfig 里 CONFIG_KSU_SUSFS* 照样存在、config
+# 照样写 y，只是 susfs.o 和那些钩子没编进去，得到一个静默没有 SUSFS 的内核。
+# 所以这里硬断言：文件、Makefile 规则、版本串、两条核心路径上的钩子。
+for f in fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h; do
+	[ -f "$TREE/$f" ] || fail "SUSFS file missing: $f (re-apply susfs4ksu @ 3c8f72e)"
+done
+grep -q '^obj-$(CONFIG_KSU_SUSFS) += susfs.o$' "$TREE/fs/Makefile" \
+	|| fail "fs/Makefile lost the susfs.o rule"
+grep -q '#define SUSFS_VERSION "v2.3.0"' "$TREE/include/linux/susfs.h" \
+	|| fail "SUSFS version moved away from v2.3.0 - update the docs and the Image marker gate"
+grep -q 'susfs_' "$TREE/fs/namei.c" || fail "fs/namei.c lost its SUSFS hooks"
+grep -q 'susfs_' "$TREE/security/selinux/hooks.c" || fail "security/selinux/hooks.c lost its SUSFS hooks"
+
 # ------------------------------------------------ 构建脚本
 [ -x "$TREE/.github/scripts/gen-config.sh" ] || fail ".github/scripts/gen-config.sh missing or not executable"
 [ -f "$TREE/.github/scripts/extract-ikconfig" ] || fail ".github/scripts/extract-ikconfig missing"
+[ -f "$TREE/.github/scripts/patch-ksu-builtin.py" ] || fail ".github/scripts/patch-ksu-builtin.py missing"
 grep -q 'marble_gki.fragment' "$TREE/.github/workflows/build.yml" \
 	|| fail "workflow does not go through the fragment (gen-config.sh)"
 
 echo "in-tree marble delta verified:"
 echo "  base               LineageOS sm8450 lineage-24.0 @ eff4b404 (Linux 5.10.269), tree at repo root"
 echo "  DroidSpaces        sysv_sem/sysv_shm/mq_bytes parked in Android ABI padding (sched.h / sched/user.h)"
+echo "  SUSFS              susfs4ksu gki-android12-5.10 @ 3c8f72e baked in (fs/susfs.c, v2.3.0)"
 echo "  config             marble_gki.fragment only; gki_defconfig still byte-identical (LTO_CLANG_FULL=y)"
 echo "  build entry        .github/scripts/gen-config.sh (vendor chain + fragment)"
-echo "(binary gates still to run after the build: version string, ikconfig, KSU variant)"
+echo "(binary gates still to run after the build: version string, ikconfig, KSU/SUSFS variant, KernelPatch)"

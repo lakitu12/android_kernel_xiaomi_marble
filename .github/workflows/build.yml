@@ -1,11 +1,17 @@
-name: Build marble LineageOS 24.0 (sm8450, 5.10.269) - DroidSpaces + SukiSU Ultra (KPM)
+name: Build marble LineageOS 24.0 (sm8450, 5.10.269) - DroidSpaces + SukiSU Ultra (KPM + SUSFS)
 
 # 内核源码整个在仓库里（tree 在仓库根目录，基底 = LineageOS android_kernel_xiaomi_sm8450
 # lineage-24.0 @ eff4b404 / Linux 5.10.269）。CI 不再 clone 任何内核树，只拉构建期外部
-# 组件（clang / SukiSU / AnyKernel3），所以「编出来的东西 == 仓库里 check in 的东西」。
+# 组件（clang / SukiSU / KernelPatch / AnyKernel3），所以「编出来的东西 == 仓库里
+# check in 的东西」。
 #
-# 我方的 delta（DroidSpaces kABI padding + arch/arm64/configs/marble_gki.fragment）已经
-# 是树里的提交，构建时零补丁；唯一剩下的构建期注入是 KSU/KPM（不入库，按 pin 钉死）。
+# 我方的 delta 全是树里的提交，构建时不打任何内核补丁：
+#   * DroidSpaces kABI padding + arch/arm64/configs/marble_gki.fragment（4da795e）
+#   * susfs4ksu gki-android12-5.10 @ 3c8f72e 整份烘进树（5332250）
+# 构建期只剩两件「不属于本仓库」的注入，都按 pin 钉死：
+#   * SukiSU `builtin`（drivers/kernelsu + KernelSU uapi，setup.sh 注入；SUSFS 的
+#     Kconfig 开关和 supercall 只在这条线上有），外加 patch-ksu-builtin.py 的三处修补；
+#   * KernelPatch 预补丁（kptools 把 kpimg 打进 Image，KPM 才不是 os error 95）。
 
 on:
   workflow_dispatch:
@@ -18,6 +24,10 @@ on:
       - 'arch/arm64/configs/marble_gki.fragment'
       - 'include/linux/sched.h'
       - 'include/linux/sched/user.h'
+      # SUSFS 的树内 delta（改这三个就等于改了内核行为，必须重编）
+      - 'fs/susfs.c'
+      - 'include/linux/susfs.h'
+      - 'include/linux/susfs_def.h'
       - 'README.md'
 
 env:
@@ -29,15 +39,29 @@ env:
   # code 0x36000002 -- BTI" + "Kernel panic - not syncing: bad mode" (qcom_tsens, ~0.3s),
   # captured in the device minidump partition 2026-10-16. Source: clang main-kernel branch.
   CLANG_URL: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main-kernel/clang-r596125.tar.gz
-  # SukiSU Ultra stable v4.3.0 (main line tag, UAPI 6, pinned commit).
-  # NOTE: SUSFS is a `builtin`-branch-only feature and is intentionally not part of
-  # this build; the builtin branch could not be used at the time (its 2026-10-15 head
-  # half-merged #987 and fails to compile: ksu_manager_cmd / duplicate KSU_IOCTL_KPM /
-  # TRACK_THRONE - all fine on the main line). See docs/version-pins.md.
+  # SukiSU Ultra `builtin` branch (UAPI 6), pinned. This is the line to be on:
+  # it is the only one that ships the CONFIG_KSU_SUSFS* knobs and the
+  # ksu_susfs_* supercalls, and 2026-10-30's head (b16e899a) is exactly the
+  # "fix 0b666cad breaks clang GKI builds" commit. The main line (v4.3.0 tag)
+  # has zero KSU_SUSFS options, so SUSFS is impossible there - see
+  # docs/version-pins.md §3 for why the earlier "builtin does not compile"
+  # note no longer holds and what the three local fixes are.
   # The pin MUST stay on the same UAPI line as the manager APK people install:
   # v4.2.1 = UAPI 5, v4.3.0 = UAPI 6. A mismatch makes ksud refuse every write
   # (manager home shows "kernel update required", superuser/module actions fail).
-  KSU_PIN: e67b14e6bbbbd3e67f24df658a01d3e73a64159c
+  KSU_PIN: b16e899a555e9b96aa1225f049cd7274820ca5b8
+  # susfs4ksu is committed into the tree (commit 5332250), so CI does NOT replay
+  # the patch. The pin is recorded so the delta can be re-derived byte-for-byte:
+  #   branch gki-android12-5.10, kernel_patches/{fs,include/linux} + 50_*.patch
+  # (5.10 only - the 6.6 patch from dash does not apply.)
+  SUSFS_PIN: 3c8f72ec47ee1d70496f79b54190e4c2f6223978
+  # KernelPatch is the KPM backend. CONFIG_KPM only compiles sukisu_kpm_bridge;
+  # without a KP-patched Image `ksud kpm list` returns "os error 95" and the
+  # manager reports KPM unsupported. kptools embeds kpimg, which ships in
+  # ShirkNeko/SukiSU_patch (same kpimg the 2026-11-01 device verification used).
+  KP_PIN: d4c88d6672687456b299e4b5153c24dc979d789b
+  KPIMG_PIN: eec45788c9a115e5498040298133336d6b6071dd
+  KPIMG_SHA256: 14fc6564fa092afe4a2293268cd061da64a20f61dc91396a404daf13d053f5ca
   # Numbersf/AnyKernel3 template (SukiSU-app compatible, uppercase vars)
   AK3_PIN: 0fc7569866bb5d5fe51752cc410dca3e92ab332f
 
@@ -113,16 +137,23 @@ jobs:
           git log --oneline -n 6
           echo "files: $(git ls-files | wc -l)"
 
-      # KSU/KPM 是唯一在构建期注入内核树的组件（不入库，按 pin 钉死）。必须在生成
-      # .config 之前跑，否则 CONFIG_KSU/CONFIG_KPM 这两个符号还不存在。
-      - name: Setup SukiSU Ultra (stable, pinned)
+      # KSU 是唯一在构建期注入内核树的组件（不入库，按 pin 钉死）。必须在生成
+      # .config 之前跑，否则 CONFIG_KSU/CONFIG_KPM/CONFIG_KSU_SUSFS* 这些符号还不存在。
+      # 后面的 patch-ksu-builtin.py 处理 builtin @ b16e899a 还带着的三个问题
+      # （fall-through 注释、未加守卫的 susfs_parse_priority_app_strings()、mount_hide
+      # 的 -ENOENT），任何一个没落都会让这一步失败，而不是 20 分钟后编出一个崩 UI 的内核。
+      - name: Setup SukiSU Ultra (builtin branch @ pin, UAPI 6 + SUSFS hooks)
         if: matrix.variant == 'ksu'
         run: |
           set -e
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/$KSU_PIN/kernel/setup.sh" | bash -s "$KSU_PIN"
           test "$(git -C drivers/kernelsu rev-parse HEAD)" = "$KSU_PIN" || { echo "::error::KSU pin drift"; exit 1; }
           git -C drivers/kernelsu log -1 --format='KSU @ %h %ad %s' --date=short
-          ls -l drivers/kernelsu
+          # builtin 的指纹：KSU_SUSFS 及其 9 个子开关。main 线是 0 项。
+          n=$(grep -c '^config KSU_SUSFS' drivers/kernelsu/Kconfig)
+          test "$n" = 10 || { echo "::error::expected 10 KSU_SUSFS knobs, found $n - is KSU_PIN still on the builtin branch?"; exit 1; }
+          python3 .github/scripts/patch-ksu-builtin.py .
+          ls -l drivers/kernelsu | head
 
       # LineageOS 的 vendor 配置链 + 我们的 fragment，本地和 CI 用的是同一个脚本
       # （.github/scripts/gen-config.sh）。gki_defconfig 一个字节都不改。
@@ -137,25 +168,36 @@ jobs:
           echo "=== LTO / CFI in out/.config ==="
           grep -E '^CONFIG_(LTO|CFI)' out/.config
 
-      - name: Enable KSU + KPM (ksu) / guard the bypass variant
+      - name: Enable KSU + KPM + SUSFS (ksu) / guard the bypass variant
         run: |
           set -e
           export PATH="$HOME/clang/bin:$PATH"
           MK="make O=out ARCH=arm64 TARGET_PRODUCT=marble LLVM=1 LLVM_IAS=1"
           if [ "${{ matrix.variant }}" = "ksu" ]; then
-            for cfg in KSU KPM; do
+            # 10 个 KSU_SUSFS* 就是 builtin 的全套：SUSFS 本体 + 9 个子功能。
+            # 2026-11-01 实机验收过的组合是「10 个全开 + KernelPatch 预补丁」，
+            # 崩溃根因不在 SUSFS 的任何子项，而在 KSU 的 mount_hide（见
+            # patch-ksu-builtin.py）。config 由 CI 注入、不写进 fragment，理由同 KSU：
+            # 这些符号只有在 setup.sh 注入 drivers/kernelsu 之后才存在。
+            for cfg in KSU KPM KSU_SUSFS KSU_SUSFS_SUS_PATH KSU_SUSFS_SUS_MOUNT \
+                       KSU_SUSFS_SUS_KSTAT KSU_SUSFS_SPOOF_UNAME KSU_SUSFS_ENABLE_LOG \
+                       KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+                       KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG KSU_SUSFS_OPEN_REDIRECT \
+                       KSU_SUSFS_SUS_MAP; do
               sed -i "/^# CONFIG_${cfg} is not set/d; /^CONFIG_${cfg}=/d" out/.config
               echo "CONFIG_${cfg}=y" >> out/.config
             done
             $MK olddefconfig >/dev/null
             grep -q '^CONFIG_KSU=y$' out/.config || { echo "::error::CONFIG_KSU did not land (setup.sh not applied?)"; exit 1; }
             grep -q '^CONFIG_KPM=y$' out/.config || { echo "::error::CONFIG_KPM did not land"; exit 1; }
-            echo "ksu variant: KSU + KPM enabled"
+            n=$(grep -cE '^CONFIG_KSU_SUSFS[A-Z_]*=y$' out/.config)
+            test "$n" = 10 || { echo "::error::expected 10 CONFIG_KSU_SUSFS*=y after olddefconfig, got $n"; grep -E 'KSU_SUSFS' out/.config; exit 1; }
+            echo "ksu variant: KSU + KPM + 10 SUSFS features enabled"
           else
-            if grep -qE '^CONFIG_(KSU|KPM)=y$' out/.config; then
-              echo "::error::bypass config must not enable KSU/KPM (setup.sh ran?)"; exit 1
+            if grep -qE '^CONFIG_(KSU|KPM|KSU_SUSFS[A-Z_]*)=' out/.config; then
+              echo "::error::bypass config must not enable KSU/KPM/SUSFS (setup.sh ran?)"; exit 1
             fi
-            echo "bypass variant: no KSU/KPM in config"
+            echo "bypass variant: no KSU/KPM/SUSFS in config"
           fi
           # DroidSpaces 配置不能因为追加 KSU 而丢失
           for cfg in SYSVIPC POSIX_MQUEUE IPC_NS PID_NS DEVTMPFS USER_NS; do
@@ -199,10 +241,18 @@ jobs:
           if [ "${{ matrix.variant }}" = "ksu" ]; then
             grep -q "^CONFIG_KSU=y$" /tmp/built-config || { echo "::error::KSU missing in ksu build"; exit 1; }
             grep -q "^CONFIG_KPM=y$" /tmp/built-config || { echo "::error::KPM missing in ksu build"; exit 1; }
+            n=$(grep -cE "^CONFIG_KSU_SUSFS[A-Z_]*=y$" /tmp/built-config)
+            test "$n" = 10 || { echo "::error::SUSFS in ikconfig: $n/10 features"; exit 1; }
+            # SUSFS 的版本串是实机启动时第一行佐证（"susfs is initialized! version:
+            # v2.3.0"），必须能在 Image 里找到——否则说明 susfs.o 根本没编进去。
+            strings "$IMG" | grep -qF 'susfs is initialized! version: v2.3.0' \
+              || { echo "::error::SUSFS v2.3.0 init string missing from Image"; exit 1; }
+            echo "SUSFS: 10/10 features in ikconfig, v2.3.0 marker in Image"
           else
             grep -Eq "^CONFIG_KSU=(y|m)$" /tmp/built-config && { echo "::error::KSU must be off in bypass build"; exit 1; }
             grep -Eq "^CONFIG_KPM=(y|m)$" /tmp/built-config && { echo "::error::KPM must be off in bypass build"; exit 1; }
-            echo "bypass: KSU/KPM confirmed off"
+            grep -Eq "^CONFIG_KSU_SUSFS[A-Z_]*=" /tmp/built-config && { echo "::error::SUSFS must be off in bypass build"; exit 1; }
+            echo "bypass: KSU/KPM/SUSFS confirmed off"
           fi
           mkdir -p /tmp/ak3-images
           if [ "${{ matrix.variant }}" = "ksu" ]; then
@@ -210,6 +260,42 @@ jobs:
           else
             cp -v "$IMG" /tmp/ak3-images/Image-bypass
           fi
+
+      # KPM 的后端是 KernelPatch：CONFIG_KPM 只编 sukisu_kpm_bridge，超调用要落到
+      # 一段预置进 Image 的 kpimg 上，否则 ksud 侧就是 "os error 95 / not supported"
+      # （2026-10-31 实测，管理器拓展页显示 KPM 不支持）。kptools 是唯一能做这个
+      # 预补丁的工具，所以这一步现场编它；kpimg 用 SukiSU_patch 里那份（sha256 钉死）。
+      # 只处理 ksu 变体：bypass 没有 KSU，也就没有 KPM。
+      - name: KernelPatch prepatch - KPM backend (ksu only)
+        if: matrix.variant == 'ksu'
+        run: |
+          set -e
+          git clone -q --filter=blob:none https://github.com/bmax121/KernelPatch.git /tmp/kp
+          git -C /tmp/kp checkout -q "$KP_PIN"
+          git -C /tmp/kp log -1 --format='KP @ %h %ad %s' --date=short
+          test "$(git -C /tmp/kp rev-parse HEAD)" = "$KP_PIN" || { echo "::error::KernelPatch pin drift"; exit 1; }
+          # upstream 的 tools/CMakeLists 不自己拷 preset.h，得先复制
+          cp /tmp/kp/kernel/include/preset.h /tmp/kp/tools/
+          cmake -S /tmp/kp/tools -B /tmp/kp/build -DCMAKE_BUILD_TYPE=Release >/dev/null
+          cmake --build /tmp/kp/build -j"$(nproc)" >/dev/null
+          KPT=/tmp/kp/build/kptools
+          test -x "$KPT" || { echo "::error::kptools did not build"; exit 1; }
+
+          curl -fSL -o /tmp/kpimg "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/$KPIMG_PIN/kpm/kpimg"
+          echo "$KPIMG_SHA256  /tmp/kpimg" | sha256sum -c - || { echo "::error::kpimg checksum mismatch"; exit 1; }
+
+          IMG=/tmp/ak3-images/Image-ksu
+          # superkey 每次构建随机（32 字符）：KPM 经 SukiSU 的 supercall 走，管理器和
+          # ksud 都不需要它；它只给 KernelPatch 自己的 kpatch 用户态入口用，所以不入库。
+          SK=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32)
+          "$KPT" -p -i "$IMG" -k /tmp/kpimg -S "$SK" -o /tmp/Image-ksu-kp | tail -3
+          mv -f /tmp/Image-ksu-kp "$IMG"
+          echo "=== kptools -l (must say patched=true) ==="
+          "$KPT" -l -i "$IMG" | tee /tmp/kp-list.txt | head -4
+          grep -q '^patched=true$' /tmp/kp-list.txt || { echo "::error::KernelPatch prepatch did not take"; exit 1; }
+          grep -q '^version=0xe00$' /tmp/kp-list.txt || { echo "::error::unexpected kpimg version (want 0xe00)"; exit 1; }
+          strings "$IMG" | grep -qF 'KernelPatch Version:' || { echo "::error::KP banner missing from Image"; exit 1; }
+          ls -lh "$IMG"
 
       - name: Prepare AnyKernel3 (${{ matrix.variant }})
         run: |
@@ -234,7 +320,7 @@ jobs:
           ### AnyKernel setup
           # global properties
           properties() { '
-          kernel.string=marble LineageOS 24.0 5.10.269 DroidSpaces + SukiSU Ultra KPM by lakitu12
+          kernel.string=marble LineageOS 24.0 5.10.269 DroidSpaces + SukiSU Ultra KPM + SUSFS by lakitu12
           do.devicecheck=0
           do.modules=0
           do.systemless=0
@@ -278,8 +364,8 @@ jobs:
 
           if [ "${{ matrix.variant }}" = "ksu" ]; then
             IMG=/tmp/ak3-images/Image-ksu
-            OUT="AnyKernel3-marble-lineage24-5.10.269-DroidSpaces-SukiSU-KPM.zip"
-            RAW="Image-5.10.269-gki-droidspaces-lakitu-KSU-KPM"
+            OUT="AnyKernel3-marble-lineage24-5.10.269-DroidSpaces-SukiSU-KPM-SUSFS.zip"
+            RAW="Image-5.10.269-gki-droidspaces-lakitu-KSU-KPM-SUSFS"
           else
             IMG=/tmp/ak3-images/Image-bypass
             OUT="AnyKernel3-marble-lineage24-5.10.269-DroidSpaces-BYPASS-noKSU.zip"
@@ -297,6 +383,10 @@ jobs:
           unzip -p "/tmp/artifacts/$OUT" anykernel.sh | grep -E "^BLOCK=boot" || { echo "::error::uppercase BLOCK missing"; exit 1; }
           unzip -p "/tmp/artifacts/$OUT" anykernel.sh | grep -E "split_boot|write_boot" || { echo "::error::anykernel.sh missing install calls"; exit 1; }
           unzip -p "/tmp/artifacts/$OUT" Image | strings | grep -m1 "droidspaces-lakitu" || { echo "::error::wrong Image packed"; exit 1; }
+          if [ "${{ matrix.variant }}" = "ksu" ]; then
+            unzip -p "/tmp/artifacts/$OUT" Image | strings | grep -qF "susfs is initialized! version: v2.3.0" || { echo "::error::SUSFS missing from packed Image"; exit 1; }
+            unzip -p "/tmp/artifacts/$OUT" Image | strings | grep -qF "KernelPatch Version:" || { echo "::error::KernelPatch missing from packed Image"; exit 1; }
+          fi
           ls -lh /tmp/artifacts/
 
       - name: Upload artifacts
