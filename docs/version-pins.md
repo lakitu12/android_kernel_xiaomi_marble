@@ -64,7 +64,9 @@ builtin + `gki-android12-5.10` 的 SUSFS，所以 5.10 上的组合是存在过�
 
 ## 4. CI 里的冻结断言
 
-- `Fetch clang prebuilt`：`clang --version` 必须含 `clang version 22.0.2`；
+- `Fetch clang prebuilt`：下载完先 `gzip -t` 验完整性（googlesource 会中途截断，而
+  curl 仍退出 0），坏了整份重下最多 4 次；解出来的 `clang --version` 必须含
+  `clang version 22.0.2`；
 - `Setup SukiSU Ultra`：`drivers/kernelsu` 的 `HEAD` 必须等于 `KSU_PIN`，并打印
   `KSU @ <sha> <date> <subject>` 与构建日志里的 `SukiSU-Ultra version:`；
 - `Prepare AnyKernel3`：`AK3_PIN` 必须匹配，且 `tools/magiskboot` = 788840 B、
