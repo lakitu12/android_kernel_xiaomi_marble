@@ -10,7 +10,7 @@ name: Build marble LineageOS 24.0 (sm8450, 5.10.269) - DroidSpaces + SukiSU Ultr
 #   * susfs4ksu gki-android12-5.10 @ 3c8f72e 整份烘进树（5332250）
 # 构建期只剩两件「不属于本仓库」的注入，都按 pin 钉死：
 #   * SukiSU `builtin`（drivers/kernelsu + KernelSU uapi，setup.sh 注入；SUSFS 的
-#     Kconfig 开关和 supercall 只在这条线上有），外加 patch-ksu-builtin.py 的三处修补；
+#     Kconfig 开关和 supercall 只在这条线上有），外加 patch-ksu-mount-hide.py 的一处修补；
 #   * KernelPatch 预补丁（kptools 把 kpimg 打进 Image，KPM 才不是 os error 95）。
 
 on:
@@ -44,9 +44,11 @@ env:
   # none, so SUSFS is impossible there.
   # The pin must stay on the same UAPI line as the manager APK: v4.2.1 = UAPI 5,
   # v4.3.0 = UAPI 6. A mismatch makes ksud refuse every write.
-  # Three build-time fixes are applied by patch-ksu-builtin.py; see
-  # docs/version-pins.md, section "SukiSU：用 builtin 分支".
-  KSU_PIN: b16e899a555e9b96aa1225f049cd7274820ca5b8
+  # 1cfa5734 is the mount_hide fix (SukiSU#1035): the -ENOENT open hook that made
+  # libincfs abort is gone, replaced by per-record filtering. Its symbol lookup
+  # still misses the CFI jump table on 5.10, so patch-ksu-mount-hide.py is applied
+  # on top; see docs/version-pins.md, sections "SukiSU" and "mount_hide".
+  KSU_PIN: 1cfa57340590971cba7521ed536da8ebbedc5f0a
   # susfs4ksu is committed into the tree (commit 5332250), so CI does NOT replay
   # the patch. The pin is recorded so the delta can be re-derived byte-for-byte:
   #   branch gki-android12-5.10, kernel_patches/{fs,include/linux} + 50_*.patch
@@ -136,9 +138,10 @@ jobs:
 
       # KSU 是唯一在构建期注入内核树的组件（不入库，按 pin 钉死）。必须在生成
       # .config 之前跑，否则 CONFIG_KSU/CONFIG_KPM/CONFIG_KSU_SUSFS* 这些符号还不存在。
-      # 后面的 patch-ksu-builtin.py 处理 builtin @ b16e899a 还带着的三个问题
-      # （fall-through 注释、未加守卫的 susfs_parse_priority_app_strings()、mount_hide
-      # 的 -ENOENT），任何一个没落都会让这一步失败，而不是 20 分钟后编出一个崩 UI 的内核。
+      # 钉住 mount_hide 的两件事：open 不能再返回 -ENOENT（libincfs 会把 SystemUI 打进
+      # 崩溃循环，SukiSU#1035），以及 show 函数要按 CFI 跳表解析（5.10 的 .cfi_jt，
+      # 否则过滤器永远装不上、功能静默失效）。patch-ksu-mount-hide.py 负责后者，
+      # 匹配不上就失败，而不是编出一个「看起来正常但什么都不隐藏」的内核。
       - name: Setup SukiSU Ultra (builtin branch @ pin, UAPI 6 + SUSFS hooks)
         if: matrix.variant == 'ksu'
         run: |
@@ -149,7 +152,7 @@ jobs:
           # builtin 的指纹：KSU_SUSFS 及其 9 个子开关。main 线是 0 项。
           n=$(grep -c '^config KSU_SUSFS' drivers/kernelsu/Kconfig)
           test "$n" = 10 || { echo "::error::expected 10 KSU_SUSFS knobs, found $n - is KSU_PIN still on the builtin branch?"; exit 1; }
-          python3 .github/scripts/patch-ksu-builtin.py .
+          python3 .github/scripts/patch-ksu-mount-hide.py .
           ls -l drivers/kernelsu | head
 
       # LineageOS 的 vendor 配置链 + 我们的 fragment，本地和 CI 用的是同一个脚本
@@ -173,8 +176,8 @@ jobs:
           if [ "${{ matrix.variant }}" = "ksu" ]; then
             # 10 个 KSU_SUSFS* 就是 builtin 的全套：SUSFS 本体 + 9 个子功能。
             # 2026-11-01 实机验收过的组合是「10 个全开 + KernelPatch 预补丁」，
-            # 崩溃根因不在 SUSFS 的任何子项，而在 KSU 的 mount_hide（见
-            # patch-ksu-builtin.py）。config 由 CI 注入、不写进 fragment，理由同 KSU：
+            # 崩溃根因不在 SUSFS 的任何子项，而在当时 KSU 的 mount_hide（SukiSU#1035，
+            # 已由 KSU_PIN 的修法解决）。config 由 CI 注入、不写进 fragment，理由同 KSU：
             # 这些符号只有在 setup.sh 注入 drivers/kernelsu 之后才存在。
             for cfg in KSU KPM KSU_SUSFS KSU_SUSFS_SUS_PATH KSU_SUSFS_SUS_MOUNT \
                        KSU_SUSFS_SUS_KSTAT KSU_SUSFS_SPOOF_UNAME KSU_SUSFS_ENABLE_LOG \

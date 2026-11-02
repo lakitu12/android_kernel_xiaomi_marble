@@ -82,7 +82,7 @@ grep -q 'susfs_' "$TREE/security/selinux/hooks.c" || fail "security/selinux/hook
 # ------------------------------------------------ 构建脚本
 [ -x "$TREE/.github/scripts/gen-config.sh" ] || fail ".github/scripts/gen-config.sh missing or not executable"
 [ -f "$TREE/.github/scripts/extract-ikconfig" ] || fail ".github/scripts/extract-ikconfig missing"
-[ -f "$TREE/.github/scripts/patch-ksu-builtin.py" ] || fail ".github/scripts/patch-ksu-builtin.py missing"
+[ -f "$TREE/.github/scripts/patch-ksu-mount-hide.py" ] || fail ".github/scripts/patch-ksu-mount-hide.py missing"
 grep -q 'marble_gki.fragment' "$TREE/.github/workflows/build.yml" \
 	|| fail "workflow does not go through the fragment (gen-config.sh)"
 

@@ -28,7 +28,7 @@ KernelPatch 两样，都不入库，按 commit 钉死。
 | `.github/scripts/gen-config.sh` | 配置入口：vendor 配置链 + fragment，本地和 CI 同一份 |
 | `.github/scripts/verify-tree.sh` | 源码门禁：树身份、kABI padding、`gki_defconfig` 未被改动、SUSFS 钩子在位 |
 | `.github/scripts/kabi-layout-diff.py` | 比对两份 vmlinux 的同名类型尺寸，证明 kABI 未破 |
-| `.github/scripts/patch-ksu-builtin.py` | 修 builtin 分支的三处构建期问题 |
+| `.github/scripts/patch-ksu-mount-hide.py` | 让注入的 SukiSU `mount_hide` 在这棵 5.10 CFI 内核上真正装上过滤器 |
 | `docs/` | 基底来历、版本冻结、上游 README 原文 |
 
 树里的 delta 只有三个提交：kABI padding（`4da795e`）、SUSFS 2.3.0（`5332250`）、
@@ -49,10 +49,10 @@ CI 在 push 到 `main` 或手动 `Run workflow` 时跑，矩阵两个变体：
 export PATH=<clang-r596125>/bin:$PATH    # clang r596125 (22.0.2)
 bash .github/scripts/verify-tree.sh .
 
-# 注入 SukiSU builtin，修三处，打开 KSU/SUSFS 配置
-KSU_PIN=b16e899a555e9b96aa1225f049cd7274820ca5b8
+# 注入 SukiSU builtin，修 mount_hide 的符号解析，打开 KSU/SUSFS 配置
+KSU_PIN=1cfa57340590971cba7521ed536da8ebbedc5f0a
 curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/$KSU_PIN/kernel/setup.sh" | bash -s "$KSU_PIN"
-python3 .github/scripts/patch-ksu-builtin.py .
+python3 .github/scripts/patch-ksu-mount-hide.py .
 bash .github/scripts/gen-config.sh . out -droidspaces-lakitu
 for c in KSU KPM KSU_SUSFS KSU_SUSFS_SUS_PATH KSU_SUSFS_SUS_MOUNT KSU_SUSFS_SUS_KSTAT \
         KSU_SUSFS_SPOOF_UNAME KSU_SUSFS_ENABLE_LOG KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
@@ -81,10 +81,11 @@ KPM 还需要一步 KernelPatch 预补丁（`kptools -p -i Image -k kpimg -S <su
 与校验只在这个范围内兼容，用别的版本编出来的内核会在第一次调用 vendor 模块时触发
 `Bad mode ... BTI` 然后 panic 重启。
 
-**必须跑 `patch-ksu-builtin.py`**。builtin 的 `mount_hide` 对 `/proc/{mounts,mountinfo,mountstats}`
-的 open 返回 `-ENOENT`，而它默认是开的、门控覆盖所有普通 app，结果是任何读 `/proc/mounts`
-的进程 abort（libincfs），SystemUI 和 launcher 进崩溃循环。脚本把它改成默认关、open 恒成功，
-挂载隐藏交给 SUSFS 的 `sus_mount`。所以管理器里 `mount_hide` 显示 DISABLED 是预期状态。
+**`mount_hide` 要跑 `patch-ksu-mount-hide.py`**。关闭这条补丁不会编不过，也不会崩，
+只是过滤永远装不上：5.10 的 `CONFIG_CFI_CLANG` 把函数的跳表项（`.cfi_jt`）写进
+`proc_mounts.show`，上游按函数本体比对，于是每一行都是
+`mount_hide: proc_mounts show mismatch, not filtering`，功能静默失效。脚本改成按
+functable 解析（pre-KCFI 优先 `.cfi_jt`，6.1+ 取本体）。详见 `docs/version-pins.md`。
 
 LTO 用 `LTO_CLANG_THIN`（stock 是 FULL）：FULL 链接阶段要 16GB 以上，GitHub runner 只有 7GB。
 

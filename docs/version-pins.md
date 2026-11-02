@@ -8,7 +8,7 @@
 |---|---|---|
 | 内核基底 | LineageOS sm8450 `eff4b404`（5.10.269） | 仓库根的树 |
 | clang | `clang-r596125`（22.0.2） | CI `CLANG_URL` |
-| SukiSU Ultra | `builtin` 分支 `b16e899a555e`（UAPI 6） | CI `KSU_PIN` |
+| SukiSU Ultra | `builtin` 分支 `1cfa573405909`（UAPI 6） | CI `KSU_PIN` |
 | SUSFS | `susfs4ksu` `gki-android12-5.10` @ `3c8f72ec47ee`（2.3.0） | 树内提交 `5332250` |
 | KernelPatch | `bmax121/KernelPatch` @ `d4c88d667268` | CI `KP_PIN` |
 | kpimg | `ShirkNeko/SukiSU_patch` @ `eec45788c9a1`，sha256 `14fc6564…f5ca`（294384 B） | CI `KPIMG_PIN` / `KPIMG_SHA256` |
@@ -39,15 +39,10 @@ UAPI 必须和管理器一致：管理器 v4.3.0 是 UAPI 6。UAPI 5 的内核�
 更新内核」（`requiresNewKernel = managerUAPIVersion > kernelUAPIVersion`），且 ksud 的
 `ensure_uapi_version_matched` 让所有写操作失败。
 
-builtin 有三处构建期问题，由 `.github/scripts/patch-ksu-builtin.py` 修，全部严格匹配
-原文，匹配不上就报错：
-
-1. `feature/mount_hide.c`：默认值 `true → false`，open 钩子改成恒 `return 0`。原实现
-   对 `/proc/{mounts,mountinfo,mountstats}` 的 open 返回 `-ENOENT`，见下面「mount_hide」。
-2. `manager/pkg_observer.c`：`susfs_parse_priority_app_strings()` 无条件调用，但声明在
-   `CONFIG_KSU_SUSFS` 下，关掉 SUSFS 就编不过，加守卫。
-3. `policy/allowlist.c`：`/* fall through */` 在 clang 22 + `CONFIG_WERROR=y` 下报
-   `-Wimplicit-fallthrough`，改成 `fallthrough;`。
+`1cfa5734` 是 2026-11-01 报的 mount_hide 崩溃（SukiSU#1035）的上游修法，也是当前
+`builtin` 的 head。它把拒绝 open 的实现换成按记录过滤，崩溃因此消失；但它的符号解析
+在这棵树上装不上过滤器，所以仍有一处构建期补丁
+（`.github/scripts/patch-ksu-mount-hide.py`，见下面「mount_hide」）。
 
 ## SUSFS：烘进树
 
@@ -90,17 +85,35 @@ superkey 每次构建随机生成、不入库。KPM 走 SukiSU 的 supercall，�
 
 ## mount_hide
 
-builtin 的 `feature/mount_hide.c` 对命中进程的 `/proc/{mounts,mountinfo,mountstats}`
-open 直接返回 `-ENOENT`，而 `ksu_mount_hide_enabled` 默认 `true`、门控覆盖所有未授权
-su 的 app。libincfs 的 `MountRegistry` 构造时 `std::ifstream("/proc/mounts")` 失败即
-`PLOG(FATAL)`，于是 SystemUI 和 launcher 进崩溃循环。
+`b16e899a` 那版对命中进程的 `/proc/{mounts,mountinfo,mountstats}` open 直接返回
+`-ENOENT`，而 `ksu_mount_hide_enabled` 默认 `true`、门控覆盖所有未授权 su 的 app。
+libincfs 的 `MountRegistry` 构造时 `std::ifstream("/proc/mounts")` 失败即
+`PLOG(FATAL)`，于是 SystemUI 和 launcher 进崩溃循环。2026-11-01 报给上游：
+<https://github.com/SukiSU-Ultra/SukiSU-Ultra/issues/1035>。
 
-main 线的同名功能是过滤 seq_file 内容，open 始终成功，没有这个问题。
+`1cfa5734` 换成 main 线的做法：从 `security_file_permission()` 拿到每个文件的
+`proc_mounts`，把 `show` 指针换成自己的过滤器，按记录删掉模块挂载。open 始终成功，
+`/proc/mounts` 对 app 来说只是「没有那几行」。符号按 kallsyms 解析，所以
+`CONFIG_KALLSYMS_ALL=y` 是这个功能的前提（`gki_defconfig` 本来就有）。功能默认关，
+管理器里可以开；开关打开时解析失败只会 `pr_err`，不会崩。
 
-已报上游：<https://github.com/SukiSU-Ultra/SukiSU-Ultra/issues/1035>。截至 2026-11-01，
-最新 builtin head `464f9201` 仍是 `-ENOENT` + 默认开。上游修好后可以去掉
-`patch-ksu-builtin.py` 的第 1 条，挂载隐藏改回 KSU 的实现；在那之前由 SUSFS 的
-`sus_mount` 负责，它做 umount，不会让任何进程打不开 `/proc/mounts`。
+上游用 `ksu_lookup_kernel_symbols()` 取 `show_vfsmnt()` 等三个函数的地址，拿它与
+`proc_mounts.show` 比对。这在本树（5.10 + `CONFIG_CFI_CLANG`）不成立：函数地址被取用时
+存进结构体的是 CFI 跳表项 `.cfi_jt`，不是函数本体。
+
+```
+p->show   ffffffdbf482f5e8   show_vfsmnt.<hash>.cfi_jt
+expected  ffffffdbf445f54c   show_vfsmnt
+```
+
+于是 `p->show != expected`，过滤器永远装不上：open 正常（崩溃确实修了），但一个挂载都
+不隐藏，dmesg 只有一行 `mount_hide: proc_mounts show mismatch, not filtering`。
+`ksu_resolve_symbol_for_functable_hook()` 本来就是为这种情况写的（pre-KCFI 优先
+`.cfi_jt`，6.1+ 取本体），`patch-ksu-mount-hide.py` 把解析换成它，实测装了过滤器之后
+app / isolated 进程读到 151 行、root 152 行，测试挂载对前者不可见。
+
+CI 钉住三件事：解析走 functable hook、`ksu_mount_hide_file_permission` 还在、不能再出现
+`return -ENOENT;`。
 
 ## CI 断言
 
@@ -109,7 +122,8 @@ main 线的同名功能是过滤 seq_file 内容，open 始终成功，没有这
   `fs/namei.c` 与 `security/selinux/hooks.c` 的钩子）。这些缺了不会编不过，只会静默
   少功能，所以必须硬断言
 - `Setup SukiSU Ultra`：`drivers/kernelsu` 的 HEAD 等于 `KSU_PIN`，`Kconfig` 里有 10 个
-  `config KSU_SUSFS*`（builtin 的指纹），`patch-ksu-builtin.py` 三处修补全部落地
+  `config KSU_SUSFS*`（builtin 的指纹），`patch-ksu-mount-hide.py` 的断言全过（functable
+  解析、`file_permission` 过滤器在位、没有 `return -ENOENT;`）
 - 配置门禁：ksu 变体 `olddefconfig` 后有 10 个 `CONFIG_KSU_SUSFS*=y`
 - `KernelPatch prepatch`：`KP_PIN` 匹配、kpimg sha256 匹配、`kptools -l` 输出
   `patched=true` + `version=0xe00`、Image 里有 `KernelPatch Version:`
