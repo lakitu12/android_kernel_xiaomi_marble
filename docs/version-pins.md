@@ -112,6 +112,11 @@ expected  ffffffdbf445f54c   show_vfsmnt
 `.cfi_jt`，6.1+ 取本体），`patch-ksu-mount-hide.py` 把解析换成它，实测装了过滤器之后
 app / isolated 进程读到 151 行、root 152 行，测试挂载对前者不可见。
 
+和 SUSFS 的 `sus_mount` 不能同时生效：开着 `hide-sus-mnts-for-non-su-procs` 时，
+`mounts_open()` 装的 `show` 是 `susfs_show_vfsmnt()`，这里同样对不上，也只打一行
+mismatch，KSU 的过滤器不装。实测两种状态：SUSFS 隐藏关掉时 app 读 151 行、测试挂载
+不可见；打开后 app 读 152 行、那一行又出现了。要用哪个由管理员决定，别指望两个都开。
+
 CI 钉住三件事：解析走 functable hook、`ksu_mount_hide_file_permission` 还在、不能再出现
 `return -ENOENT;`。
 
