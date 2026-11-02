@@ -93,9 +93,9 @@ libincfs 的 `MountRegistry` 构造时 `std::ifstream("/proc/mounts")` 失败即
 
 `1cfa5734` 换成 main 线的做法：从 `security_file_permission()` 拿到每个文件的
 `proc_mounts`，把 `show` 指针换成自己的过滤器，按记录删掉模块挂载。open 始终成功，
-`/proc/mounts` 对 app 来说只是「没有那几行」。符号按 kallsyms 解析，所以
-`CONFIG_KALLSYMS_ALL=y` 是这个功能的前提（`gki_defconfig` 本来就有）。功能默认关，
-管理器里可以开；开关打开时解析失败只会 `pr_err`，不会崩。
+`/proc/mounts` 对 app 来说只是「没有那几行」。符号名走 kallsyms，前提是
+`CONFIG_KALLSYMS=y`（GKI 本来就有；`KALLSYMS_ALL` 只决定要不要带数据符号，函数符号
+无论如何都在）。功能默认关，管理器里可以开；开关打开时解析失败只会 `pr_err`，不会崩。
 
 上游用 `ksu_lookup_kernel_symbols()` 取 `show_vfsmnt()` 等三个函数的地址，拿它与
 `proc_mounts.show` 比对。这在本树（5.10 + `CONFIG_CFI_CLANG`）不成立：函数地址被取用时
