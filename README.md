@@ -18,6 +18,9 @@ KernelPatch 两样，都不入库，按 commit 钉死。
 
 基底就是 ROM 出厂用的那棵树，vermagic、KMI、CFI 天然对齐，不需要补 vendor hook。
 
+`main` 的历史已接到上游 `lineage-24.0`（1,044,931 个提交），`git blame` 能越过导入点；
+代价是首次 clone 约 2.6GB，日常看改动用 `git log --first-parent`。
+
 ## 仓库结构
 
 | 路径 | 内容 |
