@@ -57,17 +57,26 @@ rsync -rcnl --exclude=.git --exclude=.github --exclude=docs \
 补回来的文件要写进提交信息，说明为什么被 ignore、为什么仍然要跟踪，不要只 `add -f`
 了事，否则下次换基底还会丢。
 
-## 为什么只有一个提交
+## 历史
 
-marble 只有一个上游修订，没有要合的东西；真历史帮不上忙，浅拉取进来的 Linux 1.2M
-commit 还会把仓库撑到几个 GB。所以这里导入成一个提交，provenance 写在提交信息和本文里。需要真历史时按需挂：
+导入时只写一个快照提交：marble 只有一个上游修订，没有要合的东西；真历史当时帮不上忙，
+浅拉取进来的 Linux 100 万 commit 还会把仓库撑到几个 GB。provenance 写在提交信息和本文里。
 
-```bash
-git remote add lineage https://github.com/LineageOS/android_kernel_xiaomi_sm8450
-git fetch lineage lineage-24.0     # 之后 git log/blame 就能越过导入点
-```
+2026-11-17 把这层历史补上了：`git merge -s ours --allow-unrelated-histories eff4b404`，
+`eff4b404` 和它的 1,044,931 个祖先成为 `main` 的第二父，树一个字节没动。现在：
+
+- `git log` / `git blame` / `git show` 能越过导入点看到上游提交
+- 上游更新以 `eff4b404` 为 merge base，`git merge lineage/lineage-24.0` 是正常三方合并
+- `git log --first-parent` 仍是 marble 自己的 30 个提交，日常看改动用它
+
+代价是 `.git` 从 217MB 变成约 2.6GB（lineage-24.0 全历史），第一次 clone 会慢。
 
 ## 上游更新时怎么重做
+
+上游只是往前走几步、基底还是这棵树时，直接 `git fetch lineage lineage-24.0` 后
+`git merge lineage/lineage-24.0`：历史已经接上，冲突只会落在我们改过的文件上。
+
+上游把整个基底换了（换 Android 版本、换 KMI）时，按下面重做：
 
 ```bash
 # 1) 拿新的 lineage-24.0，先看相对我们基底改了什么
