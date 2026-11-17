@@ -50,8 +50,10 @@ export PATH=<clang-r596125>/bin:$PATH    # clang r596125 (22.0.2)
 bash .github/scripts/verify-tree.sh .
 
 # 注入 SukiSU builtin，修 mount_hide 的符号解析，打开 KSU/SUSFS 配置
+# 仓库已改名 SukiSU-Ultra -> SukiSU-Nova；按新名 clone，setup.sh 里的旧地址只当兜底
 KSU_PIN=1cfa57340590971cba7521ed536da8ebbedc5f0a
-curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/$KSU_PIN/kernel/setup.sh" | bash -s "$KSU_PIN"
+git clone https://github.com/SukiSU-Nova/SukiSU-Nova KernelSU
+curl -LSs "https://raw.githubusercontent.com/SukiSU-Nova/SukiSU-Nova/$KSU_PIN/kernel/setup.sh" | bash -s "$KSU_PIN"
 python3 .github/scripts/patch-ksu-mount-hide.py .
 bash .github/scripts/gen-config.sh . out -droidspaces-lakitu
 for c in KSU KPM KSU_SUSFS KSU_SUSFS_SUS_PATH KSU_SUSFS_SUS_MOUNT KSU_SUSFS_SUS_KSTAT \
@@ -96,10 +98,10 @@ LTO 用 `LTO_CLANG_THIN`（stock 是 FULL）：FULL 链接阶段要 16GB 以上�
 
 - 内核：<https://github.com/LineageOS/android_kernel_xiaomi_sm8450>（`lineage-24.0` @ `eff4b404`）
 - DroidSpaces：<https://github.com/ravindu644/Droidspaces-OSS>（kABI 补丁在 `GKI/below-kernel-6.12/`）
-- SukiSU Ultra：<https://github.com/SukiSU-Ultra/SukiSU-Ultra>（`builtin` 分支）
+- SukiSU-Nova（原 SukiSU Ultra）：<https://github.com/SukiSU-Nova/SukiSU-Nova>（`builtin` 分支）
 - SUSFS：<https://gitlab.com/simonpunk/susfs4ksu>（`gki-android12-5.10` @ `3c8f72e`）
 - KernelPatch：<https://github.com/bmax121/KernelPatch>（`d4c88d6`）
-- kpimg：<https://github.com/ShirkNeko/SukiSU_patch>（`eec45788`）
+- kpimg：<https://github.com/SukiSU-Nova/SukiSU_patch>（`eec45788`）
 - AnyKernel3 模板：<https://github.com/Numbersf/AnyKernel3>
 - 基底导入流程：[docs/upstream-base.md](docs/upstream-base.md)
 - 版本冻结与理由：[docs/version-pins.md](docs/version-pins.md)

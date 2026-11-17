@@ -8,10 +8,10 @@
 |---|---|---|
 | 内核基底 | LineageOS sm8450 `eff4b404`（5.10.269） | 仓库根的树 |
 | clang | `clang-r596125`（22.0.2） | CI `CLANG_URL` |
-| SukiSU Ultra | `builtin` 分支 `1cfa573405909`（UAPI 6） | CI `KSU_PIN` |
+| SukiSU-Nova（原 SukiSU Ultra） | `builtin` 分支 `1cfa573405909`（UAPI 6） | CI `KSU_PIN` |
 | SUSFS | `susfs4ksu` `gki-android12-5.10` @ `3c8f72ec47ee`（2.3.0） | 树内提交 `5332250` |
 | KernelPatch | `bmax121/KernelPatch` @ `d4c88d667268` | CI `KP_PIN` |
-| kpimg | `ShirkNeko/SukiSU_patch` @ `eec45788c9a1`，sha256 `14fc6564…f5ca`（294384 B） | CI `KPIMG_PIN` / `KPIMG_SHA256` |
+| kpimg | `SukiSU-Nova/SukiSU_patch` @ `eec45788c9a1`，sha256 `14fc6564…f5ca`（294384 B） | CI `KPIMG_PIN` / `KPIMG_SHA256` |
 | AnyKernel3 | `Numbersf/AnyKernel3` @ `0fc75698` | CI `AK3_PIN` |
 | DroidSpaces kABI | `GKI/below-kernel-6.12` 的 `001` / `002` | 树内提交 `4da795e` |
 
@@ -32,6 +32,12 @@ CI 第一步校验 `clang version 22.0.2`，不匹配直接失败。
 
 ## SukiSU：用 builtin 分支
 
+> 2026-11 仓库改名：`SukiSU-Ultra/SukiSU-Ultra` → `SukiSU-Nova/SukiSU-Nova`；配套的
+> `ShirkNeko/SukiSU_patch` 也迁到 `SukiSU-Nova/SukiSU_patch`。旧名的网页/git 访问还能
+> 靠重定向撑一阵，迁移后的 `raw.githubusercontent.com` 不保证，`SukiSU_patch` 的旧地址
+> 在 2026-11-17 实测已经 404（sha256 仍是同一份 kpimg）。CI 和本文一律按新名取；pin 的
+> 提交在新仓库里原样存在，UAPI 不变。
+
 只有 `builtin` 分支带 `CONFIG_KSU_SUSFS*`（10 项）和 `ksu_susfs_*` 超调用，main 线一项
 都没有，所以要用 SUSFS 只能走这条线。
 
@@ -39,8 +45,11 @@ UAPI 必须和管理器一致：管理器 v4.3.0 是 UAPI 6。UAPI 5 的内核�
 更新内核」（`requiresNewKernel = managerUAPIVersion > kernelUAPIVersion`），且 ksud 的
 `ensure_uapi_version_matched` 让所有写操作失败。
 
-`1cfa5734` 是 2026-11-01 报的 mount_hide 崩溃（SukiSU#1035）的上游修法，也是当前
-`builtin` 的 head。它把拒绝 open 的实现换成按记录过滤，崩溃因此消失；但它的符号解析
+`1cfa5734` 是 2026-11-01 报的 mount_hide 崩溃（SukiSU#1035）的上游修法，也是 2026-11-02
+时 `builtin` 的 head。之后 `builtin` 又前进了 12 个提交到 `4bec532`（SukiSU-Nova 3.0.0：
+包名 `com.sukisu.nova`、版本基线换到 3.0.0，内核侧加 `KSU_SUSFS_PRIORITY_UID_FILTER`）；
+那是另一条 UAPI 线，管理器要同步换，本次不跟。它把拒绝 open 的实现换成按记录过滤，
+崩溃因此消失；但它的符号解析
 在这棵树上装不上过滤器，所以仍有一处构建期补丁
 （`.github/scripts/patch-ksu-mount-hide.py`，见下面「mount_hide」）。
 
@@ -74,7 +83,7 @@ ksu 变体在版本门禁之后、打包 AnyKernel3 之前多一步：
 
 1. 按 `KP_PIN` 取 KernelPatch，把 `kernel/include/preset.h` 拷进 `tools/`（上游的 CMake
    不自己做这件事），编出 `kptools`；
-2. 从 `ShirkNeko/SukiSU_patch` 取 `kpimg`，校验 sha256；
+2. 从 `SukiSU-Nova/SukiSU_patch` 取 `kpimg`，校验 sha256（旧名 `ShirkNeko` 迁移后 404）；
 3. `kptools -p -i Image -k kpimg -S <superkey> -o Image`；
 4. 断言 `kptools -l` 输出 `patched=true` / `version=0xe00`，且 Image 里有
    `KernelPatch Version:`。
@@ -89,7 +98,7 @@ superkey 每次构建随机生成、不入库。KPM 走 SukiSU 的 supercall，�
 `-ENOENT`，而 `ksu_mount_hide_enabled` 默认 `true`、门控覆盖所有未授权 su 的 app。
 libincfs 的 `MountRegistry` 构造时 `std::ifstream("/proc/mounts")` 失败即
 `PLOG(FATAL)`，于是 SystemUI 和 launcher 进崩溃循环。2026-11-01 报给上游：
-<https://github.com/SukiSU-Ultra/SukiSU-Ultra/issues/1035>。
+<https://github.com/SukiSU-Nova/SukiSU-Nova/issues/1035>（报时仓库还叫 SukiSU-Ultra）。
 
 `1cfa5734` 换成 main 线的做法：从 `security_file_permission()` 拿到每个文件的
 `proc_mounts`，把 `show` 指针换成自己的过滤器，按记录删掉模块挂载。open 始终成功，

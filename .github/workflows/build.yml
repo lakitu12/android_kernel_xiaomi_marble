@@ -48,6 +48,9 @@ env:
   # libincfs abort is gone, replaced by per-record filtering. Its symbol lookup
   # still misses the CFI jump table on 5.10, so patch-ksu-mount-hide.py is applied
   # on top; see docs/version-pins.md, sections "SukiSU" and "mount_hide".
+  # The repo was renamed SukiSU-Ultra/SukiSU-Ultra -> SukiSU-Nova/SukiSU-Nova in
+  # Nov 2026 (the pin and its UAPI do not change with the rename). New pins must
+  # be taken from the new name and stay on the same UAPI line as the manager APK.
   KSU_PIN: 1cfa57340590971cba7521ed536da8ebbedc5f0a
   # susfs4ksu is committed into the tree (commit 5332250), so CI does NOT replay
   # the patch. The pin is recorded so the delta can be re-derived byte-for-byte:
@@ -57,7 +60,9 @@ env:
   # KernelPatch is the KPM backend. CONFIG_KPM only compiles sukisu_kpm_bridge;
   # without a KP-patched Image `ksud kpm list` returns "os error 95" and the
   # manager reports KPM unsupported. kptools embeds kpimg, which ships in
-  # ShirkNeko/SukiSU_patch (same kpimg the 2026-11-01 device verification used).
+  # SukiSU-Nova/SukiSU_patch (same kpimg the 2026-11-01 device verification used).
+  # The old ShirkNeko/SukiSU_patch path now answers 404 on raw.githubusercontent
+  # (the repo moved with the SukiSU-Nova rename); fetch it from the new name.
   KP_PIN: d4c88d6672687456b299e4b5153c24dc979d789b
   KPIMG_PIN: eec45788c9a115e5498040298133336d6b6071dd
   KPIMG_SHA256: 14fc6564fa092afe4a2293268cd061da64a20f61dc91396a404daf13d053f5ca
@@ -146,7 +151,13 @@ jobs:
         if: matrix.variant == 'ksu'
         run: |
           set -e
-          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/$KSU_PIN/kernel/setup.sh" | bash -s "$KSU_PIN"
+          # The repo moved to SukiSU-Nova/SukiSU-Nova. The pinned commit is still
+          # reachable there, but the pin's own setup.sh clones the old URL and
+          # relies on GitHub's rename redirect. Clone the new name ourselves so
+          # the git remote, the setup.sh `git pull` and the pin all point at one
+          # place; setup.sh then skips its own clone.
+          git clone -q https://github.com/SukiSU-Nova/SukiSU-Nova.git KernelSU
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Nova/SukiSU-Nova/$KSU_PIN/kernel/setup.sh" | bash -s "$KSU_PIN"
           test "$(git -C drivers/kernelsu rev-parse HEAD)" = "$KSU_PIN" || { echo "::error::KSU pin drift"; exit 1; }
           git -C drivers/kernelsu log -1 --format='KSU @ %h %ad %s' --date=short
           # builtin 的指纹：KSU_SUSFS 及其 9 个子开关。main 线是 0 项。
@@ -232,7 +243,7 @@ jobs:
           echo "kernel: $KVER"
           echo "$KVER" | grep -q "5.10.269" || { echo "::error::version drifted: $KVER"; exit 1; }
           echo "$KVER" | grep -q "droidspaces-lakitu" || { echo "::error::localversion suffix missing: $KVER"; exit 1; }
-          echo "SukiSU: $(grep -m1 'SukiSU-Ultra version:' build.log || echo '(version line not found)')"
+          echo "SukiSU: $(grep -m1 -E 'SukiSU-(Ultra|Nova) version:' build.log || echo '(version line not found)')" 
 
           CFG=$GITHUB_WORKSPACE/.github/scripts/extract-ikconfig
           chmod +x "$CFG"
@@ -265,6 +276,8 @@ jobs:
       # 一段预置进 Image 的 kpimg 上，否则 ksud 侧就是 "os error 95 / not supported"
       # （2026-10-31 实测，管理器拓展页显示 KPM 不支持）。kptools 是唯一能做这个
       # 预补丁的工具，所以这一步现场编它；kpimg 用 SukiSU_patch 里那份（sha256 钉死）。
+      # kpimg 的旧地址 ShirkNeko/SukiSU_patch 在迁移后 raw 直接 404，这里用新名
+      # SukiSU-Nova/SukiSU_patch（同一个 pin，sha256 不变）。
       # 只处理 ksu 变体：bypass 没有 KSU，也就没有 KPM。
       - name: KernelPatch prepatch - KPM backend (ksu only)
         if: matrix.variant == 'ksu'
@@ -281,7 +294,7 @@ jobs:
           KPT=/tmp/kp/build/kptools
           test -x "$KPT" || { echo "::error::kptools did not build"; exit 1; }
 
-          curl -fSL -o /tmp/kpimg "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/$KPIMG_PIN/kpm/kpimg"
+          curl -fSL -o /tmp/kpimg "https://raw.githubusercontent.com/SukiSU-Nova/SukiSU_patch/$KPIMG_PIN/kpm/kpimg"
           echo "$KPIMG_SHA256  /tmp/kpimg" | sha256sum -c - || { echo "::error::kpimg checksum mismatch"; exit 1; }
 
           IMG=/tmp/ak3-images/Image-ksu
@@ -301,7 +314,7 @@ jobs:
         run: |
           set -e
           mkdir -p /tmp/artifacts
-          # Base: Numbersf/AnyKernel3 (SukiSU-Ultra main maintainer) - uppercase var
+          # Base: Numbersf/AnyKernel3 (SukiSU maintainer) - uppercase var
           # convention (BLOCK/IS_SLOT_DEVICE/NO_MAGISK_CHECK) that the SukiSU app
           # flasher expects. Lowercase osm0sis style was silently ignored by the
           # app flasher ("flash failed, no details"). Pinned + tool-size gated
